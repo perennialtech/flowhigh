@@ -1,7 +1,6 @@
 from flowhigh import FlowHighSR
 import gradio as gr
 
-
 model = FlowHighSR.from_pretrained(device="cuda")
 
 
@@ -10,7 +9,10 @@ def generate(audio, sr_out, timestep):
     print(sr_in)
     print(audio)
     wav = model.generate(
-        audio, sr_in, sr_out, timestep=timestep,
+        audio,
+        sr_in,
+        sr_out,
+        timestep=timestep,
     )
     return sr_out, wav.detach().cpu().squeeze(0).numpy()
 

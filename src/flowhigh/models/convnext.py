@@ -3,7 +3,6 @@ from typing import Optional
 import torch
 from torch import nn
 from torch.nn import Module
-from torch.nn.utils import weight_norm
 
 
 class ConvNeXtBlock(Module):
@@ -23,16 +22,20 @@ class ConvNeXtBlock(Module):
         dim: int,
         intermediate_dim: int,
         layer_scale_init_value: float,
-        hidden_dim: Optional[int] = None, # time embedding dim
+        hidden_dim: Optional[int] = None,  # time embedding dim
     ):
         super().__init__()
-        self.dwconv = nn.Conv1d(dim, dim, kernel_size=7, padding=3, groups=dim)  # depthwise conv
+        self.dwconv = nn.Conv1d(
+            dim, dim, kernel_size=7, padding=3, groups=dim
+        )  # depthwise conv
         self.adanorm = hidden_dim is not None
         if hidden_dim:
-            self.norm = AdaLayerNorm(dim, hidden_dim ,eps=1e-6)
+            self.norm = AdaLayerNorm(dim, hidden_dim, eps=1e-6)
         else:
             self.norm = nn.LayerNorm(dim, eps=1e-6)
-        self.pwconv1 = nn.Linear(dim, intermediate_dim)  # pointwise/1x1 convs, implemented with linear layers
+        self.pwconv1 = nn.Linear(
+            dim, intermediate_dim
+        )  # pointwise/1x1 convs, implemented with linear layers
         self.act = nn.GELU()
         self.pwconv2 = nn.Linear(intermediate_dim, dim)
         self.gamma = (
@@ -41,7 +44,9 @@ class ConvNeXtBlock(Module):
             else None
         )
 
-    def forward(self, x: torch.Tensor, cond: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, cond: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         residual = x
         x = self.dwconv(x)
         x = x.transpose(1, 2)  # (B, C, T) -> (B, T, C)
@@ -59,6 +64,7 @@ class ConvNeXtBlock(Module):
 
         x = residual + x
         return x
+
 
 class AdaLayerNorm(nn.Module):
     """
@@ -197,4 +203,3 @@ class AdaLayerNorm(nn.Module):
 #     @staticmethod
 #     def get_padding(kernel_size: int, dilation: int = 1) -> int:
 #         return int((kernel_size * dilation - dilation) / 2)
-

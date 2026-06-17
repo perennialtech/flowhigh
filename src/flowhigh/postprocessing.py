@@ -4,8 +4,12 @@ from torchaudio.transforms import Spectrogram, InverseSpectrogram
 
 class PostProcessing:
     def __init__(self, rank):
-        self.stft = Spectrogram(2048, hop_length=480, win_length=2048, power=None, pad_mode='constant').cuda(rank)
-        self.istft = InverseSpectrogram(2048, hop_length=480, win_length=2048, pad_mode='constant').cuda(rank)
+        self.stft = Spectrogram(
+            2048, hop_length=480, win_length=2048, power=None, pad_mode="constant"
+        ).cuda(rank)
+        self.istft = InverseSpectrogram(
+            2048, hop_length=480, win_length=2048, pad_mode="constant"
+        ).cuda(rank)
 
     def get_cutoff_index(self, spec, threshold=0.99):
         energy = torch.cumsum(torch.sum(spec.squeeze().abs(), dim=-1), dim=0)
@@ -19,8 +23,8 @@ class PostProcessing:
         # pred, src : [1, Time]
         assert len(pred.shape) == 2 and len(src.shape) == 2
 
-        spec_pred = self.stft(pred) # [1, Channel, Time]
-        spec_src  = self.stft(src) # [1, Channel, Time]
+        spec_pred = self.stft(pred)  # [1, Channel, Time]
+        spec_src = self.stft(src)  # [1, Channel, Time]
 
         # energy cutoff of spec_src
         cr = self.get_cutoff_index(spec_src)
@@ -33,7 +37,7 @@ class PostProcessing:
         spec_pred = spec_pred[:, :, :min_time_dim]
         spec_src = spec_src[:, :, :min_time_dim]
 
-        spec_result[:,cr:, ...] = spec_pred[:, cr:, ...]
+        spec_result[:, cr:, ...] = spec_pred[:, cr:, ...]
         spec_result[:, :cr, ...] = spec_src[:, :cr, ...]
 
         audio = self.istft(spec_result, length=length)
@@ -44,8 +48,8 @@ class PostProcessing:
         # pred, src : [1, Time]
         assert len(pred.shape) == 2 and len(src.shape) == 2
 
-        spec_pred = self.stft(pred) # [1, Channel, Time]
-        spec_src  = self.stft(src) # [1, Channel, Time]
+        spec_pred = self.stft(pred)  # [1, Channel, Time]
+        spec_src = self.stft(src)  # [1, Channel, Time]
 
         batch = spec_pred.shape[0]
         cr = self.get_cutoff_index(spec_src)
@@ -64,7 +68,7 @@ class PostProcessing:
         # Replicate phase information to match the dimensions of spec_pred
         num_repeats = (spec_pred.size(1) - cr) // cr + 1
         replicate_phase = src_phase.repeat(batch, num_repeats, 1)
-        replicate_phase = replicate_phase[:, - (spec_pred.size(1) - cr):, ...]
+        replicate_phase = replicate_phase[:, -(spec_pred.size(1) - cr) :, ...]
         print(pred_mag.size())
         print(replicate_phase.size())
 
@@ -76,8 +80,7 @@ class PostProcessing:
 
         audio = self.istft(spec_result, length=length)
         audio = audio / torch.abs(audio).max() * 0.99
-        return audio, src_phase ,replicate_phase
-
+        return audio, src_phase, replicate_phase
 
     # For mel repalcement
     def _locate_cutoff_freq(self, stft, percentile=0.985):
