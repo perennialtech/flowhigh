@@ -93,7 +93,7 @@ wheels = [
 [[package]]
 name = "bigvgan"
 version = "2.4.0"
-source = { git = "https://github.com/perennialtech/BigVGAN#1fc9ec2a0a04cfe1559b9c1e6dce529f8b755afa" }
+source = { git = "https://github.com/perennialtech/BigVGAN#68e0b0ef43552e416fbd42cfff85ac516e34bba1" }
 dependencies = [
     { name = "auraloss" },
     { name = "huggingface-hub" },
@@ -107,6 +107,7 @@ dependencies = [
     { name = "soundfile" },
     { name = "tensorboard" },
     { name = "torch" },
+    { name = "torchaudio" },
     { name = "tqdm" },
 ]
 
