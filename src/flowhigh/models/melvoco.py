@@ -1,9 +1,10 @@
-from librosa.filters import mel as librosa_mel_fn
+import json
 import torch
 import torch.nn as nn
 import torchaudio.transforms as T
 from einops import rearrange
-import bigvgan
+from librosa.filters import mel as librosa_mel_fn
+from bigvgan.bigvgan import BigVGAN
 from .modules import spectral_normalize_torch
 
 mel_basis = {}
@@ -47,7 +48,7 @@ class MelVoco(nn.Module):
             with open(vocoder_config) as f:
                 h = AttrDict(json.load(f))
 
-            self.vocoder = bigvgan.BigVGAN(h, use_cuda_kernel=True)
+            self.vocoder = BigVGAN(h, use_cuda_kernel=True)
 
             checkpoint_dict = torch.load(vocoder_path, map_location="cpu")
             self.vocoder.load_state_dict(checkpoint_dict["generator"])
