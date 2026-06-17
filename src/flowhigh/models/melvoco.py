@@ -4,8 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio.transforms as T
 from einops import rearrange
-
-from .bigvgan.init_vocoder import init_bigvgan
+import bigvgan
 from .modules import spectral_normalize_torch
 
 
@@ -41,7 +40,25 @@ class MelVoco(nn.Module):
 
         if vocoder == 'bigvgan':
             self.vocoder_name = vocoder
-            self.vocoder = init_bigvgan(vocoder_config, vocoder_path, vocoder_freeze=True)
+
+            class AttrDict(dict):
+                def __init__(self, *args, **kwargs):
+                    super(AttrDict, self).__init__(*args, **kwargs)
+                    self.__dict__ = self
+
+            with open(vocoder_config) as f:
+                h = AttrDict(json.load(f))
+
+            self.vocoder = bigvgan.BigVGAN(h, use_cuda_kernel=True)
+
+            checkpoint_dict = torch.load(vocoder_path, map_location="cpu")
+            self.vocoder.load_state_dict(checkpoint_dict['generator'])
+
+            self.vocoder.cuda().eval()
+            self.vocoder.remove_weight_norm()
+
+            for param in self.vocoder.parameters():
+                param.requires_grad = False
         else:
             raise ValueError("unsuitable vocoder name")
 
@@ -119,4 +136,3 @@ class MelVoco(nn.Module):
 
         if self.vocoder_name == 'bigvgan':
             return self.vocoder.forward(mel)
-

@@ -5,6 +5,7 @@ readme = "README.md"
 requires-python = ">=3.11, <3.12"
 dependencies = [
     "beartype>=0.22",
+    "bigvgan",
     "einops>=0.8",
     "gateloop-transformer>=0.2",
     "huggingface-hub>=1.19",
@@ -52,3 +53,4 @@ pytorch-triton-rocm = [
 triton-rocm = [
     { index = "pytorch-rocm72", extra = "rocm", marker = "sys_platform == 'linux'" },
 ]
+bigvgan = { git = "https://github.com/perennialtech/BigVGAN" }
