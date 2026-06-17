@@ -44,4 +44,4 @@ syn_out/
 checkpoints/
 .gradio
 
-.log
+*.log
