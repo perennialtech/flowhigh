@@ -17,7 +17,7 @@ class ConvPositionEmbed(Module):
     def __init__(self, dim, *, kernel_size, groups=None):
         super().__init__()
         assert is_odd(kernel_size)
-        groups = default(groups, dim)  # full depthwise conv by default
+        groups = dim if groups is None else groups  # full depthwise conv by default
 
         self.dw_conv1d = nn.Sequential(
             nn.Conv1d(dim, dim, kernel_size, groups=groups, padding=kernel_size // 2),
@@ -26,7 +26,7 @@ class ConvPositionEmbed(Module):
 
     def forward(self, x, mask=None):
 
-        if exists(mask):
+        if mask is not None:
             mask = mask[..., None]
             x = x.masked_fill(~mask, 0.0)
 
@@ -34,7 +34,7 @@ class ConvPositionEmbed(Module):
         x = self.dw_conv1d(x)
         out = rearrange(x, "b c n -> b n c")
 
-        if exists(mask):
+        if mask is not None:
             out = out.masked_fill(~mask, 0.0)
 
         return out
@@ -54,7 +54,7 @@ class RMSNorm(Module):
 class AdaptiveRMSNorm(Module):
     def __init__(self, dim, cond_dim=None):
         super().__init__()
-        cond_dim = default(cond_dim, dim)
+        cond_dim = dim if cond_dim is None else cond_dim
         self.scale = dim**0.5
 
         self.to_gamma = nn.Linear(cond_dim, dim)
@@ -110,15 +110,15 @@ class Transformer(Module):
         ff_mult=4,
         attn_dropout=0.0,
         ff_dropout=0.0,
-        num_register_tokens=0.0,
-        attn_flash=False,
-        adaptive_rmsnorm=False,
+        num_register_tokens: int = 0,
+        attn_flash: bool = False,
+        adaptive_rmsnorm: bool = False,
         adaptive_rmsnorm_cond_dim_in=None,
-        use_unet_skip_connection=False,
+        use_unet_skip_connection: bool = False,
         skip_connect_scale=None,
-        attn_qk_norm=False,
-        use_gateloop_layers=False,
-        gateloop_use_jax=False,
+        attn_qk_norm: bool = False,
+        use_gateloop_layers: bool = False,
+        gateloop_use_jax: bool = False,
     ):
         super().__init__()
         assert divisible_by(depth, 2)
@@ -145,7 +145,7 @@ class Transformer(Module):
             layer = ind + 1
             has_skip = use_unet_skip_connection and layer > (depth // 2)
 
-            self.layers.append(
+            self.layers.append(  # pyright: ignore[reportArgumentType]
                 nn.ModuleList(
                     [
                         nn.Linear(dim * 2, dim) if has_skip else None,
@@ -181,6 +181,7 @@ class Transformer(Module):
 
     def forward(self, x, mask=None, adaptive_rmsnorm_cond=None):
         batch, seq_len, *_ = x.shape
+        ps = None
 
         # add register tokens to the left
 
@@ -189,7 +190,7 @@ class Transformer(Module):
 
             x, ps = pack([register_tokens, x], "b * d")
 
-            if exists(mask):
+            if mask is not None:
                 mask = F.pad(mask, (self.num_register_tokens, 0), value=True)
 
         # keep track of skip connections
@@ -220,7 +221,7 @@ class Transformer(Module):
 
         # going through the attention layers
 
-        for (
+        for (  # pyright: ignore[reportGeneralTypeIssues]
             skip_combiner,
             maybe_gateloop,
             attn_prenorm,
@@ -251,6 +252,7 @@ class Transformer(Module):
         # remove the register tokens
 
         if self.has_register_tokens:
+            assert ps is not None
             _, x = unpack(x, ps, "b * d")
 
         return self.final_norm(x)

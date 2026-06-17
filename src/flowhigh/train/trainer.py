@@ -1,24 +1,31 @@
+# pyright: reportMissingTypeArgument=false
+
 import re
 from pathlib import Path
 from shutil import rmtree
 from functools import partial
 from contextlib import nullcontext
+from typing import Any
 
 from beartype import beartype
 
 import torch
-from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import Dataset, random_split
 
 
-from cfm_superresolution import ConditionalFlowMatcherWrapper
-from utils import STFTMag
-from data import get_dataloader
-from optimizer import get_optimizer
+from ..cfm_superresolution import ConditionalFlowMatcherWrapper
+from ..utils import STFTMag
+from .data import get_dataloader
+from .optimizer import get_optimizer
 
-from accelerate import Accelerator, DistributedType
-from accelerate.utils import DistributedDataParallelKwargs
+from accelerate import (
+    Accelerator,
+    DistributedType,
+)  # pyright: ignore[reportMissingImports]
+from accelerate.utils import (
+    DistributedDataParallelKwargs,
+)  # pyright: ignore[reportMissingImports]
 
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
@@ -69,7 +76,7 @@ def checkpoint_num_steps(checkpoint_path):
     return int(results[-1])
 
 
-class FLowHighTrainer(nn.Module):
+class FLowHighTrainer:
     @beartype
     def __init__(
         self,
@@ -96,16 +103,20 @@ class FLowHighTrainer(nn.Module):
         force_clear_prev_results=None,
         split_batches=False,
         drop_last=False,
-        accelerate_kwargs: dict = dict(),
+        accelerate_kwargs: dict[str, Any] | None = None,
         original_sampling_rate=None,
-        tensorboard_logger=SummaryWriter,
+        tensorboard_logger: SummaryWriter | None = None,
         downsampling: str,
-        sampling_rates: list,
-        cfm_method=str,
+        sampling_rates: list[int],
+        cfm_method: str = "",
         weighted_loss=False,
-        model_name=str,
+        model_name: str = "",
     ):
-        super().__init__()
+        if grad_accum_every <= 0:
+            raise ValueError("grad_accum_every must be greater than 0")
+        if num_train_steps is None and num_epochs is None:
+            raise ValueError("either num_train_steps or num_epochs must be specified")
+        accelerate_kwargs = {} if accelerate_kwargs is None else accelerate_kwargs
 
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
         self.accelerator = Accelerator(
@@ -114,7 +125,7 @@ class FLowHighTrainer(nn.Module):
             **accelerate_kwargs,
         )
         self.cfm_wrapper = cfm_wrapper
-        self.register_buffer("steps", torch.Tensor([0]))
+        self.steps = torch.Tensor([0])
         self.batch_size = batch_size
         self.grad_accum_every = grad_accum_every
         self.optim = get_optimizer(cfm_wrapper.parameters(), lr=lr, wd=wd)
@@ -125,24 +136,25 @@ class FLowHighTrainer(nn.Module):
         self.max_grad_norm = max_grad_norm
 
         # create dataset
-        self.ds = dataset
+        self.ds: Any = dataset
 
         # split for validation
         if valid_prepare:
             self.train_ds = self.ds
             self.valid_ds = validset
         else:
-            if valid_frac > 0:
-                train_size = int((1 - valid_frac) * len(self.ds))
-                valid_size = len(self.ds) - train_size
-                self.train_ds, self.valid_ds = random_split(
-                    self.ds,
-                    [train_size, valid_size],
-                    generator=torch.Generator().manual_seed(random_split_seed),
-                )
-                self.print(
-                    f"training with dataset of {len(self.train_ds)} samples and validating with randomly splitted {len(self.valid_ds)} samples"
-                )
+            if valid_frac <= 0:
+                raise ValueError("valid_frac must be greater than 0")
+            train_size = int((1 - valid_frac) * len(self.ds))
+            valid_size = len(self.ds) - train_size
+            self.train_ds, self.valid_ds = random_split(
+                self.ds,
+                [train_size, valid_size],
+                generator=torch.Generator().manual_seed(random_split_seed),
+            )
+            self.print(
+                f"training with dataset of {len(self.train_ds)} samples and validating with randomly splitted {len(self.valid_ds)} samples"
+            )
 
         assert (
             len(self.train_ds) >= batch_size
@@ -151,13 +163,10 @@ class FLowHighTrainer(nn.Module):
             len(self.valid_ds) >= batch_size
         ), f"validation dataset must have sufficient number of samples (currently {len(self.valid_ds)}) for training"
 
-        assert exists(num_train_steps) or exists(
-            num_epochs
-        ), "either num_train_steps or num_epochs must be specified"
-
         if exists(num_epochs):
             self.num_train_steps = len(dataset) // batch_size * num_epochs
         else:
+            assert num_train_steps is not None
             self.num_train_steps = num_train_steps
         print("num_train_stpes: ", num_train_steps)
 
@@ -309,7 +318,7 @@ class FLowHighTrainer(nn.Module):
             self.scheduler.step()
 
         # logs
-        logs = {}
+        logs: dict[str, float] = {}
 
         # training step
         # Start the batch loop!
@@ -352,10 +361,10 @@ class FLowHighTrainer(nn.Module):
         current_lr = self.scheduler.get_last_lr()[0]
 
         # tensorboard logging
-        if self.is_main and not (steps % 10):
+        if self.is_main and self.tensorboard_logger is not None and not (steps % 10):
 
             self.tensorboard_logger.add_scalar(
-                "training/cfm_loss", loss / self.grad_accum_every, global_step=steps
+                "training/cfm_loss", logs["loss"], global_step=steps
             )
             self.tensorboard_logger.add_scalar(
                 "training/lr", current_lr, global_step=steps

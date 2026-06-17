@@ -1,3 +1,5 @@
+# pyright: reportMissingTypeArgument=false
+
 from pathlib import Path
 from functools import wraps
 from einops import rearrange
@@ -78,8 +80,12 @@ class AudioDataset(Dataset):
             hi = highcut / nyq
             sos = cheby1(order, ripple, hi, btype="lowpass", output="sos")
             d_HR_wave = sosfiltfilt(sos, wave)
-            down_cond = librosa.resample(d_HR_wave, sr, random_sr, res_type="soxr_hq")
-            up_cond = librosa.resample(down_cond, random_sr, sr, res_type="soxr_hq")
+            down_cond = librosa.resample(
+                d_HR_wave, orig_sr=sr, target_sr=random_sr, res_type="soxr_hq"
+            )
+            up_cond = librosa.resample(
+                down_cond, orig_sr=random_sr, target_sr=sr, res_type="soxr_hq"
+            )
 
             if len(up_cond) < len(wave):
                 up_cond = np.pad(

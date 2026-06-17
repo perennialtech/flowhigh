@@ -1,6 +1,7 @@
 import logging
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 from beartype import beartype
 
@@ -13,13 +14,26 @@ import torchode as to
 from torchdiffeq import odeint
 from torchaudio.functional import resample
 
-from .models.modules import exists, default
+from .models.modules import exists
 from .models.common import unpack_one, pack_one
 from .models import FLowHigh
 from .utils import sequence_mask
 
 LOGGER = logging.getLogger(__file__)
 logging.basicConfig(filename="model_debug.log", level=logging.INFO)
+
+CFM_METHODS = (
+    "basic_cfm",
+    "independent_cfm_adaptive",
+    "independent_cfm_constant",
+    "independent_cfm_mix",
+)
+
+INDEPENDENT_CFM_METHODS = (
+    "independent_cfm_adaptive",
+    "independent_cfm_constant",
+    "independent_cfm_mix",
+)
 
 
 # mel helpers
@@ -113,6 +127,7 @@ class ConditionalFlowMatcherWrapper(Module):
         self.use_torchode = use_torchode
         self.torchode_method_klass = torchode_method_klass
         self.cfm_method = cfm_method
+        self.odeint_kwargs: dict[str, Any]
         self.odeint_kwargs = dict(
             atol=ode_atol, rtol=ode_rtol, method=torchdiffeq_ode_method
         )
@@ -161,41 +176,37 @@ class ConditionalFlowMatcherWrapper(Module):
     def sample(
         self,
         *,
-        cond=None,
+        cond: Tensor | None = None,
         cond_mask=None,
         time_steps=4,
         cond_scale=1.0,
         decode_to_audio=True,
-        std_1=None,
-        std_2=None,
+        std_1: float | None = None,
+        std_2: float | None = None,
         mel_pp=False,
-        cfm_method=None,
-    ):
-        if cfm_method not in [
-            "basic_cfm",
-            "independent_cfm_adaptive",
-            "independent_cfm_constant",
-            "independent_cfm_mix",
-        ]:
-            cfm_method = self.cfm_method
-            # raise ValueError("Do not define cfm_method variable for sample()")
+        cfm_method: str | None = None,
+    ) -> Tensor:
+        if cond is None:
+            raise ValueError("`cond` is required for sampling")
 
-        if cfm_method in [
-            "independent_cfm_adaptive",
-            "independent_cfm_constant",
-            "independent_cfm_mix",
-        ]:
-            if std_1 is None or std_2 is None:
-                std_1 = 1.0
-                std_2 = self.sigma
+        if cfm_method not in CFM_METHODS:
+            cfm_method = self.cfm_method
+
+        if cfm_method not in CFM_METHODS:
+            raise ValueError(f"Unsupported CFM method: {cfm_method}")
+
+        if cfm_method in INDEPENDENT_CFM_METHODS:
+            std_1 = 1.0 if std_1 is None else std_1
+            std_2 = self.sigma if std_2 is None else std_2
 
         cond_is_raw_audio = is_probably_audio_from_shape(cond)
 
         if cond_is_raw_audio:
-            assert exists(self.flowhigh.audio_enc_dec)
+            audio_enc_dec = self.flowhigh.audio_enc_dec
+            assert audio_enc_dec is not None
 
-            self.flowhigh.audio_enc_dec.eval()
-            cond = self.flowhigh.audio_enc_dec.encode(cond)
+            audio_enc_dec.eval()
+            cond = audio_enc_dec.encode(cond)
 
         self_attn_mask = None
         shape = cond.shape  # [B, Time, Channel]
@@ -224,26 +235,28 @@ class ConditionalFlowMatcherWrapper(Module):
             return out  # out.shape : [1, Time, mel_channel]
 
         if cfm_method == "basic_cfm":
-            y0 = torch.randn_like(cond).cuda()
+            y0 = torch.randn_like(cond, device=self.device)
 
         elif cfm_method == "independent_cfm_adaptive":
             # y0 from intended prior
-            epsilon = torch.randn_like(cond).cuda()
+            epsilon = torch.randn_like(cond, device=self.device)
             y0 = cond * std_1 + epsilon * std_2
 
         elif cfm_method == "independent_cfm_constant":
             # y0 from intended prior
-            epsilon = torch.randn_like(cond).cuda()
+            epsilon = torch.randn_like(cond, device=self.device)
             y0 = cond * std_1 + epsilon * std_2
 
         elif cfm_method == "independent_cfm_mix":
             # y0 from intended prior
-            epsilon = torch.randn_like(cond).cuda()
+            epsilon = torch.randn_like(cond, device=self.device)
             y0_low = cond * std_1 + epsilon * std_2
             y0_high = epsilon
             y0, _ = self.mel_replace_ops(y0_high, y0_low, cutoff_bins)
+        else:
+            raise AssertionError("unreachable CFM method branch")
 
-        t = torch.linspace(0, 1, time_steps + 1, device=self.device).cuda()
+        t = torch.linspace(0, 1, time_steps + 1, device=self.device)
         if not self.use_torchode:
 
             LOGGER.debug("sampling with torchdiffeq")
@@ -268,17 +281,23 @@ class ConditionalFlowMatcherWrapper(Module):
             t = repeat(t, "n -> b n", b=batch)
             y0, packed_shape = pack_one(y0, "b *")
             fn = partial(ode_fn, packed_shape=packed_shape)
-            term = to.ODETerm(fn)
+            term = to.ODETerm(fn)  # pyright: ignore[reportArgumentType]
             step_method = self.torchode_method_klass(term=term)
             step_size_controller = to.IntegralController(
                 atol=self.odeint_kwargs["atol"],
                 rtol=self.odeint_kwargs["rtol"],
                 term=term,
             )
-            solver = to.AutoDiffAdjoint(step_method, step_size_controller)
+            solver = to.AutoDiffAdjoint(
+                step_method, step_size_controller
+            )  # pyright: ignore[reportArgumentType]
             jit_solver = torch.compile(solver)
-            init_value = to.InitialValueProblem(y0=y0, t_eval=t)
-            sol = jit_solver.solve(init_value)
+            init_value = to.InitialValueProblem(
+                y0=y0, t_eval=t
+            )  # pyright: ignore[reportArgumentType]
+            sol = jit_solver.solve(
+                init_value
+            )  # pyright: ignore[reportFunctionMemberAccess]
             sampled = sol.ys[:, -1]
             sampled = unpack_one(sampled, packed_shape, "b *")
 
@@ -288,23 +307,27 @@ class ConditionalFlowMatcherWrapper(Module):
         if not decode_to_audio or not exists(self.flowhigh.audio_enc_dec):
             return sampled
 
-        return self.flowhigh.audio_enc_dec.decode(sampled)
+        audio_enc_dec = self.flowhigh.audio_enc_dec
+        assert audio_enc_dec is not None
+        return audio_enc_dec.decode(sampled)
 
     # this is for training only.
     def forward(
         self,
-        x1,
+        x1: Tensor,
         *,
         mask=None,
-        cond=None,
+        cond: Tensor | None = None,
         cond_mask=None,
-        cond_lengths=None,
-        input_sampling_rate=None,
+        cond_lengths: Tensor | None = None,
+        input_sampling_rate: int | None = None,
         cond_freq_masking=False,
         random_sr=None,
         weighted_loss=None,
-        cfm_method=None,  # not necessary
+        cfm_method: str | None = None,  # not necessary
     ):
+        if cond is None:
+            raise ValueError("`cond` is required for training")
 
         if cfm_method not in [
             "basic_cfm",
@@ -320,31 +343,27 @@ class ConditionalFlowMatcherWrapper(Module):
         )
 
         if any([input_is_raw_audio, cond_is_raw_audio]):
-            assert exists(
-                self.flowhigh.audio_enc_dec
+            audio_enc_dec = self.flowhigh.audio_enc_dec
+            assert (
+                audio_enc_dec is not None
             ), "audio_enc_dec must be set on FLowHigh to train directly on raw audio"
-            audio_enc_dec_sampling_rate = self.flowhigh.audio_enc_dec.sampling_rate
-            input_sampling_rate = default(
-                input_sampling_rate, audio_enc_dec_sampling_rate
-            )
+            audio_enc_dec_sampling_rate = audio_enc_dec.sampling_rate
+            if input_sampling_rate is None:
+                input_sampling_rate = audio_enc_dec_sampling_rate
 
             with torch.no_grad():
-                self.flowhigh.audio_enc_dec.eval()
+                audio_enc_dec.eval()
                 # Making Ground truth mel-spectrogram
                 if input_is_raw_audio:
                     x1 = resample(x1, input_sampling_rate, audio_enc_dec_sampling_rate)
-                    x1 = self.flowhigh.audio_enc_dec.encode(
-                        x1
-                    )  # x1.shape : [B, Time, channel]
+                    x1 = audio_enc_dec.encode(x1)  # x1.shape : [B, Time, channel]
 
                 # Making mel-spectrogram which are empty in high-freqeuncy information
                 if exists(cond) and cond_is_raw_audio:
                     cond = resample(
                         cond, input_sampling_rate, audio_enc_dec_sampling_rate
                     )
-                cond = self.flowhigh.audio_enc_dec.encode(
-                    cond
-                )  # cond.shape : [B, Time, channel]
+                cond = audio_enc_dec.encode(cond)  # cond.shape : [B, Time, channel]
 
         if x1.size(1) != cond.size(1):
             max_timelength = max(x1.size(1), cond.size(1))
@@ -354,6 +373,7 @@ class ConditionalFlowMatcherWrapper(Module):
         # main conditional flow logic is below
         times = torch.rand((batch,), dtype=dtype, device=self.device)
         t = rearrange(times, "b -> b 1 1")
+        cutoff_bins: list[int] | None = None
 
         if cfm_method == "basic_cfm":
             """
@@ -369,7 +389,6 @@ class ConditionalFlowMatcherWrapper(Module):
             """
             # x0 is gaussian noise
             x0 = torch.randn_like(x1)  # [B, Time, channel]
-            cutoff_bins = None
 
             sigma_t = 1 - (1 - sigma_min) * t
 
@@ -400,8 +419,6 @@ class ConditionalFlowMatcherWrapper(Module):
             # x0 represents low resolution audio(mel-spectogram)
             x0 = cond.detach().clone()
 
-            cutoff_bins = None
-
             mu_t = t * x1 + (1 - t) * x0
             sigma_t = 1 - (1 - sigma_min) * t
 
@@ -428,8 +445,6 @@ class ConditionalFlowMatcherWrapper(Module):
 
             # eps ~ N(0,I)
             epsilon = torch.randn_like(cond)
-
-            cutoff_bins = None
 
             # x0 represents low resolution audio(mel-spectogram)
             x0 = cond.detach().clone()
@@ -483,6 +498,8 @@ class ConditionalFlowMatcherWrapper(Module):
             for i, cutoff_bin in enumerate(cutoff_bins):
                 flow[i][..., cutoff_bin:] = flow_high[i][..., cutoff_bin:]
                 flow[i][..., :cutoff_bin] = flow_low[i][..., :cutoff_bin]
+        else:
+            raise AssertionError("unreachable CFM method branch")
 
         # x1.shape = cond.shape = x0.shape = w.shape = flow.shape = [Batch, Time, mel_bin]
 
@@ -490,58 +507,57 @@ class ConditionalFlowMatcherWrapper(Module):
         self.flowhigh.train()
 
         # Cut a small segment of mel-spectrogram
+        if cond_lengths is None:
+            raise ValueError("`cond_lengths` is required for training")
+        audio_enc_dec = self.flowhigh.audio_enc_dec
+        assert audio_enc_dec is not None
+
         cond_lengths = cond_lengths.to(torch.int32)
         max_cond_lengths = x1.size(1)
         x_mask = sequence_mask(cond_lengths, max_cond_lengths).unsqueeze(1)
-        out_size = (
-            2
-            * self.flowhigh.audio_enc_dec.sampling_rate
-            // self.flowhigh.audio_enc_dec.hop_length
-        )
+        out_size = 2 * audio_enc_dec.sampling_rate // audio_enc_dec.hop_length
 
         # Cut a small segment of mel-spectrogram in order to increase batch size
         if not isinstance(out_size, type(None)):
             max_offset = (cond_lengths - out_size).clamp(0)
-            offset_ranges = list(
-                zip([0] * max_offset.shape[0], max_offset.cpu().numpy())
-            )
 
             import random
 
-            out_offset = torch.LongTensor(
+            out_offset = torch.tensor(
                 [
-                    torch.tensor(random.choice(range(start, end)) if end > start else 0)
-                    for start, end in offset_ranges
-                ]
-            ).to(cond_lengths)
+                    random.choice(range(0, end)) if end > 0 else 0
+                    for end in max_offset.cpu().tolist()
+                ],
+                dtype=torch.long,
+                device=cond_lengths.device,
+            )
 
             w_cut = torch.zeros(
                 w.shape[0],
                 out_size,
-                self.flowhigh.audio_enc_dec.n_mels,
+                audio_enc_dec.n_mels,
                 dtype=w.dtype,
                 device=w.device,
             )
             flow_cut = torch.zeros(
                 flow.shape[0],
                 out_size,
-                self.flowhigh.audio_enc_dec.n_mels,
+                audio_enc_dec.n_mels,
                 dtype=flow.dtype,
                 device=flow.device,
             )
             cond_cut = torch.zeros(
                 cond.shape[0],
                 out_size,
-                self.flowhigh.audio_enc_dec.n_mels,
+                audio_enc_dec.n_mels,
                 dtype=cond.dtype,
                 device=cond.device,
             )
 
-            x_cut_lengths = []
+            x_cut_lengths: list[Tensor] = []
 
-            for i, (w_, flow_, cond_, out_offset_) in enumerate(
-                zip(w, flow, cond, out_offset)
-            ):
+            for i in range(w.shape[0]):
+                w_, flow_, cond_, out_offset_ = w[i], flow[i], cond[i], out_offset[i]
 
                 # w_.shape = flow_.shape = cond_.shape = [Time, channel]
                 x_cut_length = out_size + (cond_lengths[i] - out_size).clamp(None, 0)
@@ -552,7 +568,7 @@ class ConditionalFlowMatcherWrapper(Module):
                 flow_cut[i, :x_cut_length, :] = flow_[cut_lower:cut_upper, :]
                 cond_cut[i, :x_cut_length, :] = cond_[cut_lower:cut_upper, :]
 
-            x_cut_lengths = torch.LongTensor(x_cut_lengths)
+            x_cut_lengths = torch.stack(x_cut_lengths).to(cond_lengths.device)
             x_cut_mask = sequence_mask(x_cut_lengths).unsqueeze(1).to(x_mask)
 
             w = w_cut

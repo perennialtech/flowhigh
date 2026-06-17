@@ -36,6 +36,7 @@ class RotaryEmbedding(Module):
     def __init__(self, dim, theta=50000):
         super().__init__()
         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+        self.inv_freq: Tensor
         self.register_buffer("inv_freq", inv_freq)
 
     @property
@@ -45,7 +46,7 @@ class RotaryEmbedding(Module):
     @autocast(enabled=False)
     @beartype
     def forward(self, t: Union[int, Tensor]):
-        if not torch.is_tensor(t):
+        if isinstance(t, int):
             t = torch.arange(t, device=self.device)
 
         t = t.type_as(self.inv_freq)

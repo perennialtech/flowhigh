@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Sequence
 
 import numpy
 from beartype.typing import Optional
@@ -7,7 +8,6 @@ from torch import nn
 import torch.nn.functional as F
 from einops import reduce, rearrange, repeat
 
-from .modules import exists, default
 from .pos_emb import LearnedSinusoidalPosEmb
 from .convnext import ConvNeXtBlock
 from .transformer import Transformer, ConvPositionEmbed
@@ -38,8 +38,8 @@ def mask_for_freqency(cond, batch: int, seq_len: int, mel_dim: int, device):
     return cond
 
 
-def reduce_masks_with_and(*masks):
-    masks = [*filter(exists, masks)]
+def reduce_masks_with_and(*masks: torch.Tensor | None) -> torch.Tensor | None:
+    masks = [mask for mask in masks if mask is not None]
 
     if len(masks) == 0:
         return None
@@ -57,32 +57,33 @@ class FLowHigh(nn.Module):
         self,
         *,
         audio_enc_dec: Optional[MelVoco] = None,
-        dim_in=None,  # 256
-        dim_cond_emb=0,
-        dim=1024,
-        depth=24,
-        dim_head=64,
-        heads=16,
-        ff_mult=4,
-        ff_dropout=0.0,
-        time_hidden_dim=None,
-        conv_pos_embed_kernel_size=31,
-        conv_pos_embed_groups=None,
-        attn_dropout=0.0,
-        attn_flash=False,
-        attn_qk_norm=True,
-        use_gateloop_layers=False,
-        architecture="transformer",
+        dim_in: int | None = None,  # 256
+        dim_cond_emb: int = 0,
+        dim: int = 1024,
+        depth: int = 24,
+        dim_head: int = 64,
+        heads: int = 16,
+        ff_mult: int = 4,
+        ff_dropout: float = 0.0,
+        time_hidden_dim: int | None = None,
+        conv_pos_embed_kernel_size: int = 31,
+        conv_pos_embed_groups: int | None = None,
+        attn_dropout: float = 0.0,
+        attn_flash: bool = False,
+        attn_qk_norm: bool = True,
+        use_gateloop_layers: bool = False,
+        architecture: str = "transformer",
     ):
         super().__init__()
-        dim_in = default(dim_in, dim)
+        if dim_in is None:
+            dim_in = dim
 
         self.architecture = architecture
 
         if self.architecture == "transformer":
-            time_hidden_dim = default(time_hidden_dim, dim)
+            time_hidden_dim = dim if time_hidden_dim is None else time_hidden_dim
         elif self.architecture == "convnext":
-            time_hidden_dim = default(time_hidden_dim, dim)
+            time_hidden_dim = dim if time_hidden_dim is None else time_hidden_dim
         else:
             raise ValueError("Choose approriate architecture")
 
@@ -173,25 +174,27 @@ class FLowHigh(nn.Module):
 
     def forward(
         self,
-        x,
+        x: torch.Tensor,
         *,
-        times,
-        self_attn_mask=None,
-        cond_drop_prob=0.1,
-        target=None,
-        cond=None,
-        cond_mask=None,
-        cond_freq_masking=False,
+        times: torch.Tensor,
+        self_attn_mask: torch.Tensor | None = None,
+        cond_drop_prob: float = 0.1,
+        target: torch.Tensor | None = None,
+        cond: torch.Tensor | None = None,
+        cond_mask: torch.Tensor | None = None,
+        cond_freq_masking: bool = False,
         random_sr=None,
-        weighted_loss=False,
-        cutoff_bins=None,
+        weighted_loss: bool = False,
+        cutoff_bins: Sequence[int] | numpy.ndarray | None = None,
     ):
 
         x = self.proj_in(x)
-        cond = default(cond, target)
+        if cond is None:
+            if target is None:
+                raise ValueError("`cond` is required when `target` is not provided")
+            cond = target
 
-        if exists(cond):
-            cond = self.proj_in(cond)
+        cond = self.proj_in(cond)
 
         # shapes
         batch, seq_len, cond_dim = cond.shape
@@ -226,10 +229,8 @@ class FLowHigh(nn.Module):
 
         # x.shape : [B, Time, channel]
         # cond.shape : [B, Time, channel]
-        to_concat = [*filter(exists, (x, cond))]
-
         # embed.shape : [B, Time, dim_in*2 ]
-        embed = torch.cat(to_concat, dim=-1)
+        embed = torch.cat((x, cond), dim=-1)
 
         x = self.to_embed(embed)
         x = self.conv_embed(x, mask=self_attn_mask) + x
@@ -263,13 +264,13 @@ class FLowHigh(nn.Module):
 
         # if no target passed in, just return logits
         # for inference mode
-        if not exists(target):
+        if target is None:
 
             return x
 
         loss_mask = reduce_masks_with_and(cond_mask, self_attn_mask)
 
-        if not exists(loss_mask):
+        if loss_mask is None:
 
             if weighted_loss == False:
                 return F.mse_loss(x, target)
@@ -277,16 +278,18 @@ class FLowHigh(nn.Module):
             elif weighted_loss == True:
                 low_weight = 1.0
                 high_weight = 2.0
-                n_mels = self.audio_enc_dec.n_mels
-                weight = torch.ones(batch, n_mels) * low_weight
-                if isinstance(cutoff_bins, numpy.ndarray):
-                    for i, bin_idx in enumerate(cutoff_bins):
-                        weight[i, bin_idx:] = high_weight
-                else:
-                    exit()
-                    weight[cutoff_bins:] = high_weight
+                audio_enc_dec = self.audio_enc_dec
+                if audio_enc_dec is None:
+                    raise ValueError("weighted loss requires audio_enc_dec")
+                if cutoff_bins is None:
+                    raise ValueError("weighted loss requires cutoff_bins")
 
-                weight = weight.unsqueeze(1).expand(batch, seq_len, n_mels).cuda()
+                n_mels = audio_enc_dec.n_mels
+                weight = torch.ones(batch, n_mels, device=x.device) * low_weight
+                for i, bin_idx in enumerate(cutoff_bins):
+                    weight[i, int(bin_idx) :] = high_weight
+
+                weight = weight.unsqueeze(1).expand(batch, seq_len, n_mels)
                 mse_loss = F.mse_loss(x, target, reduction="none")
                 weighted_mse_loss = mse_loss * weight
                 mean_loss = weighted_mse_loss.mean()

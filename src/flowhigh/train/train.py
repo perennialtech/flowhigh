@@ -4,11 +4,12 @@ import torch
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 from torchinfo import summary
-from data import AudioDataset
+from .data import AudioDataset
 
-from cfm_superresolution import FLowHigh, MelVoco, ConditionalFlowMatcherWrapper
+from ..models import FLowHigh, MelVoco
+from ..cfm_superresolution import ConditionalFlowMatcherWrapper
 
-from trainer import FLowHighTrainer
+from .trainer import FLowHighTrainer
 
 
 def load_config(config_path):

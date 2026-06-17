@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from .pos_emb import apply_rotary_pos_emb
-from .modules import exists, default
+from .modules import exists
 
 FlashAttentionConfig = namedtuple(
     "FlashAttentionConfig",
@@ -42,7 +42,9 @@ print_once = once(print)
 
 
 class Attend(nn.Module):
-    def __init__(self, dropout=0.0, flash=False, scale=None):
+    def __init__(
+        self, dropout: float = 0.0, flash: bool = False, scale: float | None = None
+    ):
         super().__init__()
         self.dropout = dropout
         self.attn_dropout = nn.Dropout(dropout)
@@ -55,7 +57,7 @@ class Attend(nn.Module):
         # determine efficient attention configs for cuda and cpu
 
         self.cpu_config = FlashAttentionConfig(True, True, True)
-        self.cuda_config = None
+        self.cuda_config: FlashAttentionConfig | None = None
 
         if not torch.cuda.is_available() or not flash:
             return
@@ -89,12 +91,14 @@ class Attend(nn.Module):
         # Check if mask exists and expand to compatible shape
         # The mask is B L, so it would have to be expanded to B H N L
 
-        if exists(mask):
+        if mask is not None:
             mask = mask.expand(-1, heads, q_len, -1)
 
         # Check if there is a compatible device for flash attention
 
         config = self.cuda_config if is_cuda else self.cpu_config
+        if config is None:
+            config = self.cpu_config
 
         # pytorch 2.0 flash attn: q, k, v, mask, dropout, softmax_scale
 
@@ -120,9 +124,9 @@ class Attend(nn.Module):
 
         q_len, k_len, device = q.shape[-2], k.shape[-2], q.device
 
-        scale = default(self.scale, q.shape[-1] ** -0.5)
+        scale = self.scale if self.scale is not None else q.shape[-1] ** -0.5
 
-        if exists(mask) and mask.ndim != 4:
+        if mask is not None and mask.ndim != 4:
             mask = rearrange(mask, "b j -> b 1 1 j")
 
         if self.flash:
@@ -134,7 +138,7 @@ class Attend(nn.Module):
 
         # key padding mask
 
-        if exists(mask):
+        if mask is not None:
             sim = sim.masked_fill(~mask, -torch.finfo(sim.dtype).max)
 
         # attention
@@ -168,10 +172,10 @@ class Attention(Module):
         dim,
         dim_head=64,
         heads=8,
-        dropout=0,
-        flash=False,
-        qk_norm=False,
-        qk_norm_scale=10,
+        dropout: float = 0.0,
+        flash: bool = False,
+        qk_norm: bool = False,
+        qk_norm_scale: float = 10,
     ):
         super().__init__()
         self.heads = heads

@@ -1,10 +1,13 @@
 import json
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torchaudio.transforms as T
 from einops import rearrange
 from librosa.filters import mel as librosa_mel_fn
 from bigvgan.bigvgan import BigVGAN
+from bigvgan.env import AttrDict
 from .modules import spectral_normalize_torch
 
 mel_basis = {}
@@ -24,8 +27,8 @@ class MelVoco(nn.Module):
         win_length=2048,
         hop_length=480,
         vocoder="bigvgan",
-        vocoder_config="./vocoder_config.json",
-        vocoder_path=None,
+        vocoder_config: str | Path = "./vocoder_config.json",
+        vocoder_path: str | Path | None = None,
     ):
         super().__init__()
         self.log = log
@@ -40,17 +43,13 @@ class MelVoco(nn.Module):
         if vocoder == "bigvgan":
             self.vocoder_name = vocoder
 
-            class AttrDict(dict):
-                def __init__(self, *args, **kwargs):
-                    super(AttrDict, self).__init__(*args, **kwargs)
-                    self.__dict__ = self
-
             with open(vocoder_config) as f:
                 h = AttrDict(json.load(f))
 
             self.vocoder = BigVGAN(h, use_cuda_kernel=True)
 
-            checkpoint_dict = torch.load(vocoder_path, map_location="cpu")
+            assert vocoder_path is not None
+            checkpoint_dict = torch.load(str(vocoder_path), map_location="cpu")
             self.vocoder.load_state_dict(checkpoint_dict["generator"])
 
             self.vocoder.cuda().eval()
@@ -148,7 +147,7 @@ class MelVoco(nn.Module):
         spec = rearrange(spec, "b d n -> b n d")
         return spec
 
-    def decode(self, mel):
+    def decode(self, mel) -> torch.Tensor:
         mel = rearrange(mel, "b n d -> b d n")
 
         # if self.log:
@@ -156,3 +155,5 @@ class MelVoco(nn.Module):
 
         if self.vocoder_name == "bigvgan":
             return self.vocoder.forward(mel)
+
+        raise ValueError(f"unsuitable vocoder name: {self.vocoder_name}")

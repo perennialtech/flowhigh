@@ -71,13 +71,17 @@ class FlowHighSR(ConditionalFlowMatcherWrapper):
 
         elif self.upsampling_method == "librosa":
             # audio, sr = librosa.load(wav_file, sr=None, mono=True)
-            cond = librosa.resample(audio, sr, target_sampling_rate, res_type="soxr_hq")
+            cond = librosa.resample(
+                audio, orig_sr=sr, target_sr=target_sampling_rate, res_type="soxr_hq"
+            )
             cond /= np.max(np.abs(cond))
             if isinstance(cond, np.ndarray):
                 cond = torch.tensor(cond).unsqueeze(0)
             cond = cond.to(
                 torch.device("cuda" if torch.cuda.is_available() else "cpu")
             )  # [1, T]
+        else:
+            raise ValueError(f"Unsupported upsampling method: {self.upsampling_method}")
 
         # Audio must be in torch.Tensor from now on
         if isinstance(cond, np.ndarray):
@@ -86,22 +90,20 @@ class FlowHighSR(ConditionalFlowMatcherWrapper):
         cond = cond.float().to(self.device)
 
         # reconstruct high resolution sample
-        if self.cfm_method == "basic_cfm":
-            HR_audio = self.sample(
-                cond=cond, time_steps=timestep, cfm_method=self.cfm_method
-            )
-        elif self.cfm_method == "independent_cfm_adaptive":
+        if self.cfm_method == "independent_cfm_adaptive":
             HR_audio = self.sample(
                 cond=cond, time_steps=timestep, cfm_method=self.cfm_method, std_2=1.0
             )
-        elif self.cfm_method == "independent_cfm_constant":
+        elif self.cfm_method in (
+            "basic_cfm",
+            "independent_cfm_constant",
+            "independent_cfm_mix",
+        ):
             HR_audio = self.sample(
                 cond=cond, time_steps=timestep, cfm_method=self.cfm_method
             )
-        elif self.cfm_method == "independent_cfm_mix":
-            HR_audio = self.sample(
-                cond=cond, time_steps=timestep, cfm_method=self.cfm_method
-            )
+        else:
+            raise ValueError(f"Unsupported CFM method: {self.cfm_method}")
 
         HR_audio = HR_audio.squeeze(1)  # [1, T]
 
@@ -120,8 +122,8 @@ class FlowHighSR(ConditionalFlowMatcherWrapper):
     def from_local(cls, ckpt_dir: Path, device) -> "FlowHighSR":
         ckpt_dir = Path(ckpt_dir)
         voc = MelVoco(
-            vocoder_config=ckpt_dir / "bigvgan_48khz_256band.json",
-            vocoder_path=ckpt_dir / "bigvgan_48khz_256band.pt",
+            vocoder_config=str(ckpt_dir / "bigvgan_48khz_256band.json"),
+            vocoder_path=str(ckpt_dir / "bigvgan_48khz_256band.pt"),
         )
 
         SR_generator = FLowHigh(
