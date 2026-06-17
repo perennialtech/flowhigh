@@ -2,25 +2,53 @@
 name = "flowhigh"
 version = "0.1"
 readme = "README.md"
+requires-python = ">=3.11, <3.12"
 dependencies = [
-    "scipy>=1.10.1",
-    "numpy>=1.22.2",
-    "librosa>=0.9.2",
-    "torch>=2.2.1",
-    "torchaudio>=2.2.1",
-    "huggingface-hub>=0.16.4",
+    "beartype>=0.22",
+    "einops>=0.8",
+    "gateloop-transformer>=0.2",
+    "huggingface-hub>=1.19",
+    "librosa>=0.11",
+    "numpy>=2.4",
+    "scipy>=1.17",
+    "torch==2.11",
+    "torchaudio==2.11",
+    "torchdiffeq>=0.2",
+    "torchinfo>=1.8",
+    "torchode>=1.0",
+    "tqdm>=4.68",
+]
 
-    "torchinfo>=1.8.0",
-    "torchdiffeq>=0.2.3",
-    "torchode==1.0.0",
-    "einops>=0.8.0",
-    "beartype==0.17.2",
-
-    "gateloop_transformer==0.2.4",
-
-    "tqdm",
+[project.optional-dependencies]
+gradio = [
+    "gradio>=6.19",
+]
+rocm = [
+    "torch==2.11; sys_platform == 'linux'",
+    "torchaudio==2.11; sys_platform == 'linux'",
+    "pytorch-triton-rocm; sys_platform == 'linux'",
+    "triton-rocm; sys_platform == 'linux'",
 ]
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[[tool.uv.index]]
+name = "pytorch-rocm72"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-rocm72", extra = "rocm", marker = "sys_platform == 'linux'" },
+]
+torchaudio = [
+    { index = "pytorch-rocm72", extra = "rocm", marker = "sys_platform == 'linux'" },
+]
+pytorch-triton-rocm = [
+    { index = "pytorch-rocm72", extra = "rocm", marker = "sys_platform == 'linux'" },
+]
+triton-rocm = [
+    { index = "pytorch-rocm72", extra = "rocm", marker = "sys_platform == 'linux'" },
+]
