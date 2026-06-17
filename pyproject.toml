@@ -54,3 +54,11 @@ triton-rocm = [
     { index = "pytorch-rocm72", extra = "rocm", marker = "sys_platform == 'linux'" },
 ]
 bigvgan = { git = "https://github.com/perennialtech/BigVGAN" }
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.39.8",
+    "black>=26.5.1",
+    "isort>=8.0.1",
+    "ruff>=0.15.17",
+]
