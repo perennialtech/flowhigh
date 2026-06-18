@@ -84,18 +84,22 @@ class STFTMag(nn.Module):
         super().__init__()
         self.nfft = nfft
         self.hop = hop
-        # self.register_buffer('window', torch.hann_window(window_len), False)
         self.window_length = window_len
-        self.window = torch.hann_window(window_len).cuda()
+        self.register_buffer(
+            "window",
+            torch.hann_window(window_len),
+            persistent=False,
+        )
 
     # x: [B,T] or [T]
     @torch.no_grad()
     def forward(self, x):
+        window = self.window.to(device=x.device, dtype=x.dtype)
         stft = torch.stft(
             x,
             self.nfft,
             self.hop,
-            window=self.window,
+            window=window,
             win_length=self.window_length,
             return_complex=False,
         )  # return_complex=False)  #[B, F, TT,2]

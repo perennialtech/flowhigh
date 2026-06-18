@@ -52,36 +52,9 @@ class Attend(nn.Module):
         self.scale = scale
 
         self.flash = flash
-        # assert not (flash and version.parse(torch.__version__) < version.parse('2.0.0')), 'in order to use flash attention, you must be using pytorch 2.0 or above'
-
-        # determine efficient attention configs for cuda and cpu
-
-        self.cpu_config = FlashAttentionConfig(True, True, True)
-        self.cuda_config: FlashAttentionConfig | None = None
-
-        if not torch.cuda.is_available() or not flash:
-            return
-
-        device_properties = torch.cuda.get_device_properties(torch.device("cuda"))
-
-        if device_properties.major == 8 and device_properties.minor == 0:
-            print_once(
-                "A100 GPU detected, using flash attention if input tensor is on cuda"
-            )
-            self.cuda_config = FlashAttentionConfig(True, False, False)
-        else:
-            print_once(
-                "Non-A100 GPU detected, using math or mem efficient attention if input tensor is on cuda"
-            )
-            self.cuda_config = FlashAttentionConfig(False, True, True)
 
     def flash_attn(self, q, k, v, mask=None):
-        _, heads, q_len, dim_head, k_len, is_cuda, device = (
-            *q.shape,
-            k.shape[-2],
-            q.is_cuda,
-            q.device,
-        )
+        _, heads, q_len, dim_head = q.shape
 
         # if scale is given, divide by the default scale that sdpa uses
 
@@ -94,22 +67,13 @@ class Attend(nn.Module):
         if mask is not None:
             mask = mask.expand(-1, heads, q_len, -1)
 
-        # Check if there is a compatible device for flash attention
-
-        config = self.cuda_config if is_cuda else self.cpu_config
-        if config is None:
-            config = self.cpu_config
-
-        # pytorch 2.0 flash attn: q, k, v, mask, dropout, softmax_scale
-
-        with torch.backends.cuda.sdp_kernel(**config._asdict()):
-            out = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=mask,
-                dropout_p=self.dropout if self.training else 0.0,
-            )
+        out = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=mask,
+            dropout_p=self.dropout if self.training else 0.0,
+        )
 
         return out
 

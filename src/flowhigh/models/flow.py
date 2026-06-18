@@ -1,4 +1,3 @@
-import logging
 from collections.abc import Sequence
 
 import numpy
@@ -69,7 +68,7 @@ class FLowHigh(nn.Module):
         conv_pos_embed_kernel_size: int = 31,
         conv_pos_embed_groups: int | None = None,
         attn_dropout: float = 0.0,
-        attn_flash: bool = False,
+        attn_flash: bool = True,
         attn_qk_norm: bool = True,
         use_gateloop_layers: bool = False,
         architecture: str = "transformer",
@@ -185,7 +184,7 @@ class FLowHigh(nn.Module):
         cond_freq_masking: bool = False,
         random_sr=None,
         weighted_loss: bool = False,
-        cutoff_bins: Sequence[int] | numpy.ndarray | None = None,
+        cutoff_bins: Sequence[int] | numpy.ndarray | torch.Tensor | None = None,
     ):
 
         x = self.proj_in(x)
@@ -248,24 +247,11 @@ class FLowHigh(nn.Module):
             x = x.transpose(1, 2)
             x = self.final_layer_norm(x)
 
-        # Protect NaN
-        logging.info(f"After transformer: {x}")
-        if torch.isnan(x).any():
-            print(x)
-            logging.error("NaN detected after main architecture")
-
         x = self.to_pred(x)
-
-        # Protect NaN
-        logging.info(f"After predict: {x}")
-        if torch.isnan(x).any():
-            print(x)
-            logging.error("NaN detected after last projection layer")
 
         # if no target passed in, just return logits
         # for inference mode
         if target is None:
-
             return x
 
         loss_mask = reduce_masks_with_and(cond_mask, self_attn_mask)
@@ -285,9 +271,21 @@ class FLowHigh(nn.Module):
                     raise ValueError("weighted loss requires cutoff_bins")
 
                 n_mels = audio_enc_dec.n_mels
-                weight = torch.ones(batch, n_mels, device=x.device) * low_weight
-                for i, bin_idx in enumerate(cutoff_bins):
-                    weight[i, int(bin_idx) :] = high_weight
+                cutoff = torch.as_tensor(
+                    cutoff_bins,
+                    device=x.device,
+                    dtype=torch.long,
+                )
+                mel_idx = torch.arange(n_mels, device=x.device)
+                high_mask = mel_idx.unsqueeze(0) >= cutoff.unsqueeze(1)
+                low = torch.full(
+                    (batch, n_mels),
+                    low_weight,
+                    device=x.device,
+                    dtype=x.dtype,
+                )
+                high = torch.full_like(low, high_weight)
+                weight = torch.where(high_mask, high, low)
 
                 weight = weight.unsqueeze(1).expand(batch, seq_len, n_mels)
                 mse_loss = F.mse_loss(x, target, reduction="none")

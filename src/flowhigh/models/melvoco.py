@@ -46,13 +46,13 @@ class MelVoco(nn.Module):
             with open(vocoder_config) as f:
                 h = AttrDict(json.load(f))
 
-            self.vocoder = BigVGAN(h, use_cuda_kernel=True)
+            self.vocoder = BigVGAN(h, use_cuda_kernel=torch.cuda.is_available())
 
             assert vocoder_path is not None
             checkpoint_dict = torch.load(str(vocoder_path), map_location="cpu")
             self.vocoder.load_state_dict(checkpoint_dict["generator"])
 
-            self.vocoder.cuda().eval()
+            self.vocoder.eval()
             self.vocoder.remove_weight_norm()
 
             for param in self.vocoder.parameters():
@@ -69,13 +69,23 @@ class MelVoco(nn.Module):
         return self.n_mels
 
     def encode(self, audio):
-        if torch.min(audio) < -1.0:
-            print("min value is ", torch.min(audio))
-        if torch.max(audio) > 1.0:
-            print("max value is ", torch.max(audio))
-
         global mel_basis, hann_window
-        if self.f_max not in mel_basis:
+        mel_key = (
+            self.sampling_rate,
+            self.n_fft,
+            self.n_mels,
+            self.f_min,
+            self.f_max,
+            str(audio.device),
+            str(audio.dtype),
+        )
+        window_key = (
+            self.win_length,
+            str(audio.device),
+            str(audio.dtype),
+        )
+
+        if mel_key not in mel_basis:
             mel = librosa_mel_fn(
                 sr=self.sampling_rate,
                 n_fft=self.n_fft,
@@ -83,11 +93,16 @@ class MelVoco(nn.Module):
                 fmin=self.f_min,
                 fmax=self.f_max,
             )
-            mel_basis[str(self.f_max) + "_" + str(audio.device)] = (
-                torch.from_numpy(mel).float().to(audio.device)
+            mel_basis[mel_key] = torch.from_numpy(mel).to(
+                device=audio.device,
+                dtype=audio.dtype,
             )
-            hann_window[str(audio.device)] = torch.hann_window(self.win_length).to(
-                audio.device
+
+        if window_key not in hann_window:
+            hann_window[window_key] = torch.hann_window(
+                self.win_length,
+                device=audio.device,
+                dtype=audio.dtype,
             )
 
         audio = torch.nn.functional.pad(
@@ -106,7 +121,7 @@ class MelVoco(nn.Module):
             self.n_fft,
             hop_length=self.hop_length,
             win_length=self.win_length,
-            window=hann_window[str(audio.device)],
+            window=hann_window[window_key],
             center=False,
             pad_mode="reflect",
             normalized=False,
@@ -116,21 +131,23 @@ class MelVoco(nn.Module):
         spec = torch.view_as_real(spec)
         spec = torch.sqrt(spec.pow(2).sum(-1) + (1e-9))
 
-        spec = torch.matmul(mel_basis[str(self.f_max) + "_" + str(audio.device)], spec)
+        spec = torch.matmul(mel_basis[mel_key], spec)
         spec = spectral_normalize_torch(spec)
         spec = rearrange(spec, "b d n -> b n d")
         return spec
 
     def encode_torchaudio(self, audio):
 
+        device = audio.device
+
         stft_transform = T.Spectrogram(
             n_fft=self.n_fft,
             win_length=self.win_length,
             hop_length=self.hop_length,
             window_fn=torch.hann_window,
-        ).cuda()
+        ).to(device)
 
-        audio = audio.cuda()
+        audio = audio.to(device)
         spectrogram = stft_transform(audio)
 
         mel_transform = T.MelScale(
@@ -138,12 +155,12 @@ class MelVoco(nn.Module):
             sample_rate=self.sampling_rate,
             n_stft=self.n_fft // 2 + 1,
             f_max=self.f_max,
-        ).cuda()
+        ).to(device)
 
         spec = mel_transform(spectrogram)
 
         if self.log:
-            spec = T.AmplitudeToDB()(spec)
+            spec = T.AmplitudeToDB().to(device)(spec)
         spec = rearrange(spec, "b d n -> b n d")
         return spec
 

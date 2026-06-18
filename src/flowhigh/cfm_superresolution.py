@@ -35,6 +35,13 @@ INDEPENDENT_CFM_METHODS = (
     "independent_cfm_mix",
 )
 
+DEFAULT_COMPILE_BUCKET_FRAMES = (
+    *range(16, 256 + 1, 16),
+    *range(320, 4096 + 1, 64),
+)
+
+DEFAULT_WARMUP_FRAME_COUNTS = (100, 250, 500, 1000)
+
 
 # mel helpers
 mel_basis = {}
@@ -119,6 +126,9 @@ class ConditionalFlowMatcherWrapper(Module):
         torchdiffeq_ode_method="midpoint",  # [euler, midpoint]
         torchode_method_klass=to.Tsit5,
         cond_drop_prob=0.0,
+        inference_autocast_dtype: torch.dtype | None = None,
+        compile_flowhigh: bool = False,
+        compile_bucket_frames: int | tuple[int, ...] = DEFAULT_COMPILE_BUCKET_FRAMES,
     ):
         super().__init__()
         self.sigma = sigma
@@ -127,6 +137,17 @@ class ConditionalFlowMatcherWrapper(Module):
         self.use_torchode = use_torchode
         self.torchode_method_klass = torchode_method_klass
         self.cfm_method = cfm_method
+        self.inference_autocast_dtype = inference_autocast_dtype
+        self.compile_flowhigh = compile_flowhigh
+        if isinstance(compile_bucket_frames, int):
+            self.compile_bucket_frames = (
+                (compile_bucket_frames,) if compile_bucket_frames > 0 else ()
+            )
+        else:
+            self.compile_bucket_frames = tuple(
+                sorted({bucket for bucket in compile_bucket_frames if bucket > 0})
+            )
+        self.__dict__["_compiled_flowhigh"] = None
         self.odeint_kwargs: dict[str, Any]
         self.odeint_kwargs = dict(
             atol=ode_atol, rtol=ode_rtol, method=torchdiffeq_ode_method
@@ -144,33 +165,186 @@ class ConditionalFlowMatcherWrapper(Module):
         self.load_state_dict(pkg["model"], strict=strict)
         return pkg
 
+    def _flowhigh_for_inference(self):
+        if not self.compile_flowhigh or self.device.type != "cuda":
+            return self.flowhigh
+
+        if not hasattr(torch, "compile"):
+            return self.flowhigh
+
+        compiled = self.__dict__.get("_compiled_flowhigh")
+        if compiled is not None:
+            return compiled
+
+        try:
+            compiled = torch.compile(self.flowhigh, mode="reduce-overhead")
+        except Exception:
+            self.compile_flowhigh = False
+            return self.flowhigh
+
+        self.__dict__["_compiled_flowhigh"] = compiled
+        return compiled
+
+    def _bucket_frames(self, frame_count: int) -> int:
+        if not self.compile_flowhigh or not self.compile_bucket_frames:
+            return frame_count
+
+        for bucket in self.compile_bucket_frames:
+            if frame_count <= bucket:
+                return bucket
+
+        return frame_count
+
+    def _forward_with_cond_scale(
+        self,
+        model,
+        x,
+        *,
+        times,
+        cond,
+        cond_scale,
+        cond_mask,
+        self_attn_mask,
+    ):
+        autocast_enabled = (
+            self.inference_autocast_dtype is not None and x.device.type == "cuda"
+        )
+        autocast_dtype = self.inference_autocast_dtype or torch.float16
+
+        with torch.autocast(
+            device_type=x.device.type,
+            dtype=autocast_dtype,
+            enabled=autocast_enabled,
+        ):
+            logits = model(
+                x,
+                times=times,
+                cond=cond,
+                cond_drop_prob=0.0,
+                cond_mask=cond_mask,
+                self_attn_mask=self_attn_mask,
+            )
+
+            if cond_scale == 1.0:
+                return logits.to(dtype=x.dtype)
+
+            null_logits = model(
+                x,
+                times=times,
+                cond=cond,
+                cond_drop_prob=1.0,
+                cond_mask=cond_mask,
+                self_attn_mask=self_attn_mask,
+            )
+
+            out = null_logits + (logits - null_logits) * cond_scale
+            return out.to(dtype=x.dtype)
+
+    def _fixed_step_solve(self, y0, time_steps, ode_fn, method):
+        if time_steps <= 0:
+            raise ValueError("time_steps must be greater than 0")
+
+        y = y0
+        dt = 1.0 / time_steps
+
+        for step in range(time_steps):
+            t0 = y.new_tensor(step * dt)
+
+            if method == "euler":
+                y = y + dt * ode_fn(t0, y)
+                continue
+
+            if method == "midpoint":
+                tm = y.new_tensor((step + 0.5) * dt)
+                k1 = ode_fn(t0, y)
+                y = y + dt * ode_fn(tm, y + 0.5 * dt * k1)
+                continue
+
+            raise ValueError(f"Unsupported fixed-step ODE method: {method}")
+
+        return y
+
     # For mel repalcement
     def locate_cutoff_freq(self, mel, percentile=0.9995):
-        def find_cutoff(x, percentile=0.99):
-            percentile = x[-1] * percentile
-            for i in range(1, x.shape[0]):
-                if x[-i] < percentile:
-                    return x.shape[0] - i
-            return 0
-
-        magnitude = torch.abs(mel)
-        energy = torch.cumsum(torch.sum(magnitude, dim=0), dim=0)
-        return find_cutoff(energy, percentile)
+        cutoff = self.mel_cutoff_bins(mel.unsqueeze(0), percentile=percentile)
+        return int(cutoff[0].item())
 
     def mel_replace_ops(self, samples, input, cutoff_melbins):
-        result = torch.zeros_like(samples)
-        for i in range(samples.size(0)):
+        if torch.is_tensor(cutoff_melbins):
+            cutoff_melbins = cutoff_melbins.to(
+                device=samples.device,
+                dtype=torch.long,
+            )
+        else:
+            cutoff_melbins = torch.tensor(
+                cutoff_melbins,
+                device=samples.device,
+                dtype=torch.long,
+            )
 
-            result[i][..., cutoff_melbins[i] :] = samples[i][..., cutoff_melbins[i] :]
-            result[i][..., : cutoff_melbins[i]] = input[i][..., : cutoff_melbins[i]]
-        return result, cutoff_melbins
+        mel_idx = torch.arange(samples.shape[-1], device=samples.device)
+        use_input = mel_idx.view(1, 1, -1) < cutoff_melbins.view(-1, 1, 1)
+        return torch.where(use_input, input, samples), cutoff_melbins
 
-    def mel_cutoff_bins(self, input):
-        cutoff_melbins = []
-        for i in range(input.size(0)):
-            cutoff_melbin = self.locate_cutoff_freq(torch.exp(input[i]))
-            cutoff_melbins.append(cutoff_melbin)
-        return cutoff_melbins
+    def mel_cutoff_bins(self, mel, percentile=0.9995):
+        if mel.ndim == 2:
+            mel = mel.unsqueeze(0)
+
+        energy = torch.exp(mel).abs().sum(dim=1).cumsum(dim=-1)
+        threshold = energy[:, -1:] * percentile
+        cutoff = torch.searchsorted(
+            energy.contiguous(),
+            threshold.contiguous(),
+        ).squeeze(-1)
+        return cutoff.clamp(0, mel.shape[-1]).to(torch.long)
+
+    @torch.inference_mode()
+    def warmup(
+        self,
+        *,
+        batch_size: int = 1,
+        frame_counts: tuple[int, ...] | None = None,
+        time_steps: int = 1,
+        cond_scale: float = 1.0,
+        cfm_method: str | None = None,
+    ):
+        if self.device.type != "cuda" or not self.compile_flowhigh:
+            return
+
+        if frame_counts is None:
+            frame_counts = DEFAULT_WARMUP_FRAME_COUNTS
+
+        frame_counts = tuple(int(frames) for frames in frame_counts if int(frames) > 0)
+        if not frame_counts:
+            return
+
+        self.eval()
+        dim = self.flowhigh.null_cond.shape[0]
+
+        for frames in frame_counts:
+            cond = torch.zeros(
+                batch_size,
+                frames,
+                dim,
+                device=self.device,
+                dtype=torch.float32,
+            )
+            cond_mask = torch.ones(
+                batch_size,
+                frames,
+                device=self.device,
+                dtype=torch.bool,
+            )
+            self.sample(
+                cond=cond,
+                cond_mask=cond_mask,
+                time_steps=time_steps,
+                cond_scale=cond_scale,
+                decode_to_audio=False,
+                cfm_method=cfm_method,
+            )
+
+        torch.cuda.synchronize(self.device)
 
     @torch.inference_mode()
     def sample(
@@ -188,6 +362,11 @@ class ConditionalFlowMatcherWrapper(Module):
     ) -> Tensor:
         if cond is None:
             raise ValueError("`cond` is required for sampling")
+
+        cond = cond.to(self.device, dtype=torch.float32, non_blocking=True)
+
+        if cond_mask is not None:
+            cond_mask = cond_mask.to(self.device, dtype=torch.bool, non_blocking=True)
 
         if cfm_method not in CFM_METHODS:
             cfm_method = self.cfm_method
@@ -208,20 +387,41 @@ class ConditionalFlowMatcherWrapper(Module):
             audio_enc_dec.eval()
             cond = audio_enc_dec.encode(cond)
 
-        self_attn_mask = None
+        original_cond = cond
+        original_cond_frames = cond.shape[1]
+        needs_cutoff_bins = cfm_method == "independent_cfm_mix" or mel_pp
+        cutoff_bins = self.mel_cutoff_bins(cond) if needs_cutoff_bins else None
+
+        if self.compile_flowhigh and self.compile_bucket_frames:
+            target_frames = self._bucket_frames(cond.shape[1])
+            pad_frames = target_frames - cond.shape[1]
+
+            if pad_frames:
+                if cond_mask is None:
+                    cond_mask = torch.ones(
+                        (cond.shape[0], cond.shape[1]),
+                        device=cond.device,
+                        dtype=torch.bool,
+                    )
+
+                cond = F.pad(cond, (0, 0, 0, pad_frames), value=0.0)
+                cond_mask = F.pad(cond_mask, (0, pad_frames), value=False)
+
+        self_attn_mask = cond_mask
         shape = cond.shape  # [B, Time, Channel]
         batch = shape[0]
-        cutoff_bins = self.mel_cutoff_bins(cond)
 
         # neural ode
         self.flowhigh.eval()
+        inference_model = self._flowhigh_for_inference()
 
         # ode function
         def ode_fn(t, x, *, packed_shape=None):
             if exists(packed_shape):
                 x = unpack_one(x, packed_shape, "b *")
 
-            out = self.flowhigh.forward_with_cond_scale(
+            out = self._forward_with_cond_scale(
+                inference_model,
                 x,
                 times=t,
                 cond=cond,
@@ -235,29 +435,36 @@ class ConditionalFlowMatcherWrapper(Module):
             return out  # out.shape : [1, Time, mel_channel]
 
         if cfm_method == "basic_cfm":
-            y0 = torch.randn_like(cond, device=self.device)
+            y0 = torch.randn_like(cond)
 
-        elif cfm_method == "independent_cfm_adaptive":
-            # y0 from intended prior
-            epsilon = torch.randn_like(cond, device=self.device)
-            y0 = cond * std_1 + epsilon * std_2
-
-        elif cfm_method == "independent_cfm_constant":
-            # y0 from intended prior
-            epsilon = torch.randn_like(cond, device=self.device)
-            y0 = cond * std_1 + epsilon * std_2
+        elif cfm_method in {"independent_cfm_adaptive", "independent_cfm_constant"}:
+            if std_2 == 0.0:
+                y0 = cond if std_1 == 1.0 else cond * std_1
+            else:
+                epsilon = torch.randn_like(cond)
+                y0 = cond * std_1 + epsilon * std_2
 
         elif cfm_method == "independent_cfm_mix":
             # y0 from intended prior
-            epsilon = torch.randn_like(cond, device=self.device)
-            y0_low = cond * std_1 + epsilon * std_2
+            assert cutoff_bins is not None
+            epsilon = torch.randn_like(cond)
+            if std_2 == 0.0:
+                y0_low = cond if std_1 == 1.0 else cond * std_1
+            else:
+                y0_low = cond * std_1 + epsilon * std_2
             y0_high = epsilon
             y0, _ = self.mel_replace_ops(y0_high, y0_low, cutoff_bins)
         else:
             raise AssertionError("unreachable CFM method branch")
 
         t = torch.linspace(0, 1, time_steps + 1, device=self.device)
-        if not self.use_torchode:
+        ode_method = self.odeint_kwargs["method"]
+
+        if not self.use_torchode and ode_method in {"euler", "midpoint"}:
+            LOGGER.debug("sampling with manual fixed-step %s", ode_method)
+            sampled = self._fixed_step_solve(y0, time_steps, ode_fn, ode_method)
+
+        elif not self.use_torchode:
 
             LOGGER.debug("sampling with torchdiffeq")
             trajectory = odeint(ode_fn, y0, t, **self.odeint_kwargs)  # bottle neck
@@ -291,17 +498,21 @@ class ConditionalFlowMatcherWrapper(Module):
             solver = to.AutoDiffAdjoint(
                 step_method, step_size_controller
             )  # pyright: ignore[reportArgumentType]
-            jit_solver = torch.compile(solver)
             init_value = to.InitialValueProblem(
                 y0=y0, t_eval=t
             )  # pyright: ignore[reportArgumentType]
-            sol = jit_solver.solve(
+            sol = solver.solve(
                 init_value
             )  # pyright: ignore[reportFunctionMemberAccess]
             sampled = sol.ys[:, -1]
             sampled = unpack_one(sampled, packed_shape, "b *")
 
+        if sampled.shape[1] != original_cond_frames:
+            sampled = sampled[:, :original_cond_frames]
+            cond = original_cond
+
         if mel_pp:
+            assert cutoff_bins is not None
             sampled, cutoff_bins = self.mel_replace_ops(sampled, cond, cutoff_bins)
 
         if not decode_to_audio or not exists(self.flowhigh.audio_enc_dec):
@@ -417,7 +628,7 @@ class ConditionalFlowMatcherWrapper(Module):
             epsilon = torch.randn_like(cond)
 
             # x0 represents low resolution audio(mel-spectogram)
-            x0 = cond.detach().clone()
+            x0 = cond.detach()
 
             mu_t = t * x1 + (1 - t) * x0
             sigma_t = 1 - (1 - sigma_min) * t
@@ -443,17 +654,17 @@ class ConditionalFlowMatcherWrapper(Module):
             if sigma_min = 0, then independent_cfm same with rectified-flow from arbitrary distribution q(x0)
             """
 
-            # eps ~ N(0,I)
-            epsilon = torch.randn_like(cond)
-
             # x0 represents low resolution audio(mel-spectogram)
-            x0 = cond.detach().clone()
+            x0 = cond.detach()
 
             mu_t = t * x1 + (1 - t) * x0
-            sigma_t = sigma_min
 
             # sample xt
-            w = mu_t + sigma_t * epsilon
+            if sigma_min == 0:
+                w = mu_t
+            else:
+                epsilon = torch.randn_like(cond)
+                w = mu_t + sigma_min * epsilon
 
             # target vector field u_t
             flow = x1 - x0  # [B, Time, channel]
@@ -477,7 +688,7 @@ class ConditionalFlowMatcherWrapper(Module):
             cutoff_bins = self.mel_cutoff_bins(cond)
 
             # x0 represents low resolution audio(mel-spectogram)
-            x0 = cond.detach().clone()
+            x0 = cond.detach()
 
             # sample xt_high
             mu_t_high = t * x1
@@ -492,12 +703,9 @@ class ConditionalFlowMatcherWrapper(Module):
             w, _ = self.mel_replace_ops(xt_high, xt_low, cutoff_bins)
 
             # target vector field u_t
-            flow = torch.zeros_like(x1)
             flow_high = x1 - (1 - sigma_min) * epsilon
-            flow_low = x1 - x0  # [B, Time, channel]＼
-            for i, cutoff_bin in enumerate(cutoff_bins):
-                flow[i][..., cutoff_bin:] = flow_high[i][..., cutoff_bin:]
-                flow[i][..., :cutoff_bin] = flow_low[i][..., :cutoff_bin]
+            flow_low = x1 - x0  # [B, Time, channel]
+            flow, _ = self.mel_replace_ops(flow_high, flow_low, cutoff_bins)
         else:
             raise AssertionError("unreachable CFM method branch")
 
