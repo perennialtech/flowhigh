@@ -1,4 +1,5 @@
 import torchaudio as ta
+
 from flowhigh import FlowHighSR
 
 TARGET_SR = 48000

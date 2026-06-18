@@ -1,2 +1,3 @@
-from .melvoco import MelVoco
-from .flow import FLowHigh
+from .flow import FlowHigh
+
+__all__ = ["FlowHigh"]

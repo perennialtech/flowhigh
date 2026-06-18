@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
+import gradio as gr
 import numpy as np
 import torch
-import gradio as gr
 
 # Allow running from a repo checkout without installing the package.
 ROOT = Path(__file__).resolve().parent
@@ -21,11 +21,11 @@ if SRC.exists():
 IMPORT_ERROR: Exception | None = None
 try:
     from flowhigh import FlowHighSR
-    from flowhigh.postprocessing import PostProcessing
+    from flowhigh.flow import FlowPath
 except Exception as exc:  # keep UI alive and show a useful error on load/run
     IMPORT_ERROR = exc
     FlowHighSR = None  # type: ignore[assignment]
-    PostProcessing = None  # type: ignore[assignment]
+    FlowPath = None  # type: ignore[assignment]
 
 
 CFM_METHODS = [
@@ -134,7 +134,6 @@ def model_cache_key(source: str, local_ckpt_dir: str) -> tuple[str, str, str]:
 def load_model(
     source: str,
     local_ckpt_dir: str,
-    upsampling_method: str = "scipy",
     force_reload: bool = False,
 ) -> Any:
     require_ready()
@@ -142,33 +141,23 @@ def load_model(
     key = model_cache_key(source, local_ckpt_dir)
 
     if not force_reload and key in MODEL_CACHE:
-        model = MODEL_CACHE[key]
-        model.upsampling_method = upsampling_method
-        return model
+        return MODEL_CACHE[key]
 
     with MODEL_LOCK:
         if not force_reload and key in MODEL_CACHE:
-            model = MODEL_CACHE[key]
-            model.upsampling_method = upsampling_method
-            return model
+            return MODEL_CACHE[key]
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
         if source == "Hugging Face pretrained":
-            model = FlowHighSR.from_pretrained(DEVICE)  # type: ignore[union-attr]
+            model = FlowHighSR.from_pretrained(device=DEVICE)  # type: ignore[union-attr]
         elif source == "Local checkpoint directory":
             ckpt_path = validate_local_ckpt_dir(local_ckpt_dir)
-            model = FlowHighSR.from_local(ckpt_path, DEVICE)  # type: ignore[union-attr]
+            model = FlowHighSR.from_local(ckpt_path, device=DEVICE)  # type: ignore[union-attr]
         else:
             raise gr.Error(f"Unknown model source: {source}")
 
-        # FlowHighSR.from_local/from_pretrained constructs PostProcessing(0).
-        # Re-create it on the selected CUDA rank for non-zero devices.
-        if PostProcessing is not None and DEVICE.type == "cuda":
-            model.postproc = PostProcessing(DEVICE.index or 0)
-
-        model.upsampling_method = upsampling_method
         model.eval()
 
         MODEL_CACHE.clear()
@@ -230,12 +219,11 @@ def gpu_memory_info() -> str:
     return f"\nPeak CUDA memory: {allocated:.2f} GiB allocated, {reserved:.2f} GiB reserved"
 
 
-def load_button_fn(source: str, local_ckpt_dir: str, upsampling_method: str) -> str:
+def load_button_fn(source: str, local_ckpt_dir: str) -> str:
     start = time.perf_counter()
     model = load_model(
         source=source,
         local_ckpt_dir=local_ckpt_dir,
-        upsampling_method=upsampling_method,
         force_reload=True,
     )
     elapsed = time.perf_counter() - start
@@ -243,8 +231,7 @@ def load_button_fn(source: str, local_ckpt_dir: str, upsampling_method: str) -> 
     return (
         f"✅ Model loaded in {elapsed:.1f}s\n\n"
         f"Source: {source}\n"
-        f"Device: {next(model.parameters()).device}\n"
-        f"Upsampling: {upsampling_method}"
+        f"Device: {next(model.parameters()).device}"
     )
 
 
@@ -254,7 +241,6 @@ def enhance_audio(
     local_ckpt_dir: str,
     cfm_method: str,
     timesteps: int,
-    upsampling_method: str,
     seed: int,
     max_duration_sec: float,
     normalize_output: bool,
@@ -282,10 +268,9 @@ def enhance_audio(
     model = load_model(
         source=source,
         local_ckpt_dir=local_ckpt_dir,
-        upsampling_method=upsampling_method,
         force_reload=False,
     )
-    model.set_cfm_method(cfm_method)
+    model.matcher.flow = FlowPath(cfm_method, sigma=model.matcher.flow.sigma)
 
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(DEVICE)
@@ -294,13 +279,12 @@ def enhance_audio(
     start = time.perf_counter()
 
     with MODEL_LOCK:
-        with torch.inference_mode():
-            enhanced = model.generate(
-                audio=audio,
-                sr=int(sr),
-                target_sampling_rate=48000,
-                timestep=int(timesteps),
-            )
+        enhanced = model.enhance(
+            audio,
+            sample_rate=int(sr),
+            steps=int(timesteps),
+            output_sample_rate=48000,
+        )
 
     elapsed = time.perf_counter() - start
     progress(0.9, desc="Preparing output")
@@ -328,7 +312,6 @@ def enhance_audio(
         f"Output duration: {out_duration:.2f}s\n"
         f"CFM method: {cfm_method}\n"
         f"ODE timesteps: {int(timesteps)}\n"
-        f"Upsampling method: {upsampling_method}\n"
         f"Seed: {'random' if int(seed) < 0 else int(seed)}\n"
         f"Device: {next(model.parameters()).device}\n"
         f"Elapsed: {elapsed:.2f}s"
@@ -411,11 +394,6 @@ def build_demo() -> gr.Blocks:
                         step=1,
                         label="ODE timesteps",
                     )
-                    upsampling_method = gr.Radio(
-                        choices=["scipy", "librosa"],
-                        value="scipy",
-                        label="Pre-upsampling method",
-                    )
                     seed = gr.Number(
                         value=-1,
                         precision=0,
@@ -442,7 +420,7 @@ def build_demo() -> gr.Blocks:
 
         load_btn.click(
             fn=load_button_fn,
-            inputs=[source, local_ckpt_dir, upsampling_method],
+            inputs=[source, local_ckpt_dir],
             outputs=[load_status],
         )
 
@@ -454,7 +432,6 @@ def build_demo() -> gr.Blocks:
                 local_ckpt_dir,
                 cfm_method,
                 timesteps,
-                upsampling_method,
                 seed,
                 max_duration_sec,
                 normalize_output,
@@ -484,7 +461,6 @@ if ARGS.autoload:
                 else "Hugging Face pretrained"
             ),
             local_ckpt_dir=ARGS.ckpt_dir,
-            upsampling_method="scipy",
             force_reload=True,
         )
     except Exception as exc:

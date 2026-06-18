@@ -1,196 +1,148 @@
-# pyright: reportMissingTypeArgument=false
+from __future__ import annotations
 
-from pathlib import Path
-from functools import wraps
-from einops import rearrange
-from beartype import beartype
-import torch
-from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import Dataset, DataLoader
-import torchaudio
-import librosa
-from scipy.signal import (
-    cheby1,
-    sosfiltfilt,
-    resample_poly,
-)
-import numpy as np
+import os
 import random
+from pathlib import Path
 
-# utilities
+import numpy as np
+import torch
+import torchaudio
+from scipy.signal import cheby1, resample_poly, sosfiltfilt
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader, Dataset
 
 
-def cast_tuple(val, length=1):
-    return val if isinstance(val, tuple) else ((val,) * length)
+def _peak_normalize(wave: torch.Tensor) -> torch.Tensor:
+    peak = wave.abs().amax().clamp_min(1e-8)
+    return wave / peak
 
 
-# dataset functions
+def _fit_length(audio: np.ndarray, length: int) -> np.ndarray:
+    if len(audio) < length:
+        return np.pad(audio, (0, length - len(audio)), mode="constant")
+
+    if len(audio) > length:
+        return audio[:length]
+
+    return audio
 
 
-class AudioDataset(Dataset):
-    @beartype
+class AudioFolder(Dataset):
     def __init__(
         self,
-        folder,
-        audio_extension=".wav",
-        mode=None,
-        downsampling=str(),
+        folder: str | Path,
+        *,
+        sample_rate: int,
+        audio_extension: str = ".wav",
     ):
         super().__init__()
-        path = Path(folder)
-        assert path.exists(), "folder does not exist"
 
-        self.audio_extension = audio_extension
-        self.downsampling = downsampling
-        self.mode = mode
-        files = list(path.glob(f"**/*{audio_extension}"))
-        assert len(files) > 0, "no files found"
-        self.files = files
+        self.folder = Path(folder)
+        self.sample_rate = sample_rate
+
+        if not self.folder.exists():
+            raise FileNotFoundError(self.folder)
+
+        self.files = sorted(self.folder.glob(f"**/*{audio_extension}"))
+
+        if not self.files:
+            raise RuntimeError(f"no {audio_extension} files found in {self.folder}")
 
     def __len__(self):
         return len(self.files)
 
-    def __getitem__(self, idx):
-        file = self.files[idx]
+    def __getitem__(self, index: int) -> torch.Tensor:
+        audio, sr = torchaudio.load(self.files[index])
+        audio = audio.mean(dim=0)
 
-        if self.downsampling == "torchaudio":
-            wave, sr = torchaudio.load(file)  # [1, Time]
-            wave = rearrange(wave, "1 ... -> ...")  # [Time]
-            length = wave.shape[-1]
-            return wave, length
+        if sr != self.sample_rate:
+            audio = torchaudio.functional.resample(audio, sr, self.sample_rate)
 
-        elif self.downsampling == "librosa":
-            wave, sr = librosa.load(file, sr=None, mono=True)  # [Time]
-            wave /= np.max(np.abs(wave))
-            nyq = sr // 2
-            min_value = 4000
-            max_value = 32000
-            step = 1000
-            sampling_rates = list(range(min_value, max_value + step, step))
-            random_sr = random.choice(sampling_rates)
+        return _peak_normalize(audio.float())
 
-            if self.mode == "valid":
-                order = 8
-                ripple = 0.05
-            else:
-                order = random.randint(1, 11)
-                ripple = random.choice([1e-9, 1e-6, 1e-3, 1, 5])
 
-            highcut = random_sr // 2
-            hi = highcut / nyq
-            sos = cheby1(order, ripple, hi, btype="lowpass", output="sos")
-            d_HR_wave = sosfiltfilt(sos, wave)
-            down_cond = librosa.resample(
-                d_HR_wave, orig_sr=sr, target_sr=random_sr, res_type="soxr_hq"
+class RandomLowpassResample:
+    def __init__(
+        self,
+        *,
+        sample_rate: int,
+        min_sr: int = 4000,
+        max_sr: int = 32000,
+        method: str = "scipy",
+    ):
+        self.sample_rate = sample_rate
+        self.min_sr = min_sr
+        self.max_sr = max_sr
+        self.method = method
+
+    def __call__(self, audio: torch.Tensor) -> torch.Tensor:
+        random_sr = random.randrange(self.min_sr, self.max_sr + 1000, 1000)
+        wave = audio.detach().cpu().numpy()
+
+        nyquist = self.sample_rate / 2
+        highcut = min(random_sr / 2, nyquist * 0.99)
+
+        order = random.randint(1, 11)
+        ripple = random.choice([1e-9, 1e-6, 1e-3, 1, 5])
+        sos = cheby1(order, ripple, highcut / nyquist, btype="lowpass", output="sos")
+        filtered = sosfiltfilt(sos, wave)
+
+        if self.method == "scipy":
+            down = resample_poly(filtered, random_sr, self.sample_rate)
+            up = resample_poly(down, self.sample_rate, random_sr)
+        elif self.method == "librosa":
+            import librosa
+
+            down = librosa.resample(
+                filtered,
+                orig_sr=self.sample_rate,
+                target_sr=random_sr,
+                res_type="soxr_hq",
             )
-            up_cond = librosa.resample(
-                down_cond, orig_sr=random_sr, target_sr=sr, res_type="soxr_hq"
+            up = librosa.resample(
+                down,
+                orig_sr=random_sr,
+                target_sr=self.sample_rate,
+                res_type="soxr_hq",
             )
+        else:
+            raise ValueError(f"Unsupported degradation method: {self.method}")
 
-            if len(up_cond) < len(wave):
-                up_cond = np.pad(
-                    wave, (0, len(wave) - len(up_cond)), "constant", constant_values=0
-                )
-            elif len(up_cond) > len(wave):
-                up_cond = up_cond[: len(wave)]
-
-            length = wave.shape[-1]
-
-            if self.mode == "valid":
-                return torch.from_numpy(wave).float(), length
-            return (
-                torch.from_numpy(wave).float(),
-                length,
-                torch.from_numpy(up_cond).float(),
-                random_sr,
-            )
-
-        elif self.downsampling == "scipy":
-
-            wave, sr = librosa.load(file, sr=None, mono=True)
-            wave /= np.max(np.abs(wave))
-            nyq = sr // 2
-            min_value = 4000
-            max_value = 32000
-            step = 1000
-            sampling_rates = list(range(min_value, max_value + step, step))
-            random_sr = random.choice(sampling_rates)
-
-            if self.mode == "valid":
-                order = 8
-                ripple = 0.05
-
-            else:
-                order = random.randint(1, 11)
-                ripple = random.choice([1e-9, 1e-6, 1e-3, 1, 5])
-
-            highcut = random_sr // 2
-            hi = highcut / nyq
-
-            sos = cheby1(order, ripple, hi, btype="lowpass", output="sos")
-            d_HR_wave = sosfiltfilt(sos, wave)
-            down_cond = resample_poly(d_HR_wave, random_sr, sr)
-            up_cond = resample_poly(down_cond, sr, random_sr)
-
-            if len(up_cond) < len(wave):
-                up_cond = np.pad(
-                    wave, (0, len(wave) - len(up_cond)), "constant", constant_values=0
-                )
-            elif len(up_cond) > len(wave):
-                up_cond = up_cond[: len(wave)]
-
-            length = wave.shape[-1]
-
-            if self.mode == "valid":
-                return torch.from_numpy(wave).float(), length
-
-            up_cond = torch.from_numpy(up_cond.copy()).float()
-            wave = torch.from_numpy(wave.copy()).float()
-            return wave, length, up_cond, random_sr
+        return torch.from_numpy(_fit_length(up, len(wave)).copy()).float()
 
 
-# dataloader functions
+class SuperResolutionDataset(Dataset):
+    def __init__(
+        self,
+        source: AudioFolder,
+        degradation: RandomLowpassResample,
+    ):
+        super().__init__()
+        self.source = source
+        self.degradation = degradation
+
+    def __len__(self):
+        return len(self.source)
+
+    def __getitem__(self, index: int):
+        target = self.source[index]
+        condition = self.degradation(target)
+        return target, condition, target.shape[-1]
 
 
-def collate_one_or_multiple_tensors(fn):
-    @wraps(fn)
-    def inner(data):
-        is_one_data = not isinstance(data[0], tuple)
-        if is_one_data:
-            data = fn(data)
-            return (data,)
-        outputs = []
-
-        for index, datum in enumerate(zip(*data)):
-
-            if index == 1:  # length
-                output = torch.tensor(datum, dtype=torch.long)
-            elif index == 2:  # up_cond wav
-                output = fn(datum)
-            elif index == 3:
-                output = list(datum)
-            else:
-                output = fn(datum)
-            outputs.append(output)
-        return tuple(outputs)
-
-    return inner
-
-
-@collate_one_or_multiple_tensors
-def curtail_to_shortest_collate(data):
-    min_len = min(*[datum.shape[0] for datum in data])
-    data = [datum[:min_len] for datum in data]
-    return torch.stack(data)
-
-
-@collate_one_or_multiple_tensors
-def pad_to_longest_fn(data):
-    return pad_sequence(data, batch_first=True)
-
-
-def get_dataloader(ds, pad_to_longest=True, **kwargs):
-    collate_fn = pad_to_longest_fn if pad_to_longest else curtail_to_shortest_collate
-    return DataLoader(
-        ds, collate_fn=collate_fn, num_workers=8, persistent_workers=True, **kwargs
+def collate_audio(batch):
+    targets, conditions, lengths = zip(*batch)
+    return (
+        pad_sequence(targets, batch_first=True),
+        pad_sequence(conditions, batch_first=True),
+        torch.tensor(lengths, dtype=torch.long),
     )
+
+
+def get_dataloader(dataset: Dataset, **kwargs):
+    kwargs.setdefault("num_workers", min(8, os.cpu_count() or 1))
+
+    if kwargs["num_workers"] > 0:
+        kwargs.setdefault("persistent_workers", True)
+
+    return DataLoader(dataset, collate_fn=collate_audio, **kwargs)
