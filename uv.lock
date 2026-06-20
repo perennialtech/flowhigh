@@ -112,7 +112,7 @@ wheels = [
 [[package]]
 name = "bigvgan"
 version = "2.4.0"
-source = { git = "https://github.com/perennialtech/BigVGAN#85fd59aeb77fb1dd09abccc60b24bb6070cda2ec" }
+source = { git = "https://github.com/perennialtech/BigVGAN#ab03856674f46a192893b7735284ae8d5d3aeebf" }
 dependencies = [
     { name = "auraloss" },
     { name = "huggingface-hub" },
@@ -121,8 +121,6 @@ dependencies = [
     { name = "ninja" },
     { name = "nnaudio" },
     { name = "numpy" },
-    { name = "nvidia-cuda-nvrtc-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-flowhigh-cuda' or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm')" },
-    { name = "nvidia-cuda-nvrtc-cu12", version = "12.9.86", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-flowhigh-cpu' or extra != 'extra-8-flowhigh-cuda' or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm')" },
     { name = "pesq" },
     { name = "scipy" },
     { name = "soundfile" },
@@ -366,7 +364,7 @@ nvjitlink = [
     { name = "nvidia-nvjitlink-cu12", marker = "(sys_platform == 'linux' and extra == 'extra-8-flowhigh-cuda') or (sys_platform == 'win32' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm')" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-8-flowhigh-cuda') or (sys_platform == 'win32' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm')" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "(sys_platform == 'linux' and extra == 'extra-8-flowhigh-cuda') or (sys_platform == 'win32' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm')" },
 ]
 nvtx = [
     { name = "nvidia-nvtx-cu12", marker = "(sys_platform == 'linux' and extra == 'extra-8-flowhigh-cuda') or (sys_platform == 'win32' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm')" },
@@ -497,6 +495,7 @@ cpu = [
     { name = "torchaudio", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-8-flowhigh-cpu') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm')" },
 ]
 cuda = [
+    { name = "nvidia-cuda-nvrtc-cu12" },
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
     { name = "torchaudio", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
 ]
@@ -528,6 +527,7 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.19" },
     { name = "librosa", specifier = ">=0.11" },
     { name = "numpy", specifier = ">=2.4" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "extra == 'cuda'", specifier = ">=12.0" },
     { name = "pytorch-triton-rocm", marker = "sys_platform == 'linux' and extra == 'rocm'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "flowhigh", extra = "rocm" } },
     { name = "scipy", specifier = ">=1.17" },
     { name = "torch", marker = "sys_platform != 'darwin' and extra == 'cuda'", specifier = "==2.11", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "flowhigh", extra = "cuda" } },
@@ -1171,37 +1171,10 @@ wheels = [
 name = "nvidia-cuda-nvrtc-cu12"
 version = "12.8.93"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'win32'",
-    "sys_platform == 'emscripten'",
-    "sys_platform != 'emscripten' and sys_platform != 'win32'",
-]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/05/6b/32f747947df2da6994e999492ab306a903659555dddc0fbdeb9d71f75e52/nvidia_cuda_nvrtc_cu12-12.8.93-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:a7756528852ef889772a84c6cd89d41dfa74667e24cca16bb31f8f061e3e9994", size = 88040029, upload-time = "2025-03-07T01:42:13.562Z" },
     { url = "https://files.pythonhosted.org/packages/eb/d1/e50d0acaab360482034b84b6e27ee83c6738f7d32182b987f9c7a4e32962/nvidia_cuda_nvrtc_cu12-12.8.93-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:fc1fec1e1637854b4c0a65fb9a8346b51dd9ee69e61ebaccc82058441f15bce8", size = 43106076, upload-time = "2025-03-07T01:41:59.817Z" },
     { url = "https://files.pythonhosted.org/packages/45/51/52a3d84baa2136cc8df15500ad731d74d3a1114d4c123e043cb608d4a32b/nvidia_cuda_nvrtc_cu12-12.8.93-py3-none-win_amd64.whl", hash = "sha256:7a4b6b2904850fe78e0bd179c4b655c404d4bb799ef03ddc60804247099ae909", size = 73586838, upload-time = "2025-03-07T01:52:13.483Z" },
-]
-
-[[package]]
-name = "nvidia-cuda-nvrtc-cu12"
-version = "12.9.86"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'win32' and extra != 'extra-8-flowhigh-cpu' and extra != 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm'",
-    "sys_platform == 'emscripten' and extra != 'extra-8-flowhigh-cpu' and extra != 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm'",
-    "sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-8-flowhigh-cpu' and extra != 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm'",
-    "sys_platform == 'win32' and extra == 'extra-8-flowhigh-cpu' and extra != 'extra-8-flowhigh-cuda' and extra != 'extra-8-flowhigh-rocm'",
-    "sys_platform == 'emscripten' and extra == 'extra-8-flowhigh-cpu' and extra != 'extra-8-flowhigh-cuda' and extra != 'extra-8-flowhigh-rocm'",
-    "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-8-flowhigh-cpu' and extra != 'extra-8-flowhigh-cuda' and extra != 'extra-8-flowhigh-rocm'",
-    "sys_platform == 'darwin' and extra == 'extra-8-flowhigh-cpu' and extra != 'extra-8-flowhigh-cuda' and extra != 'extra-8-flowhigh-rocm'",
-    "sys_platform == 'win32' and extra != 'extra-8-flowhigh-cpu' and extra != 'extra-8-flowhigh-cuda' and extra != 'extra-8-flowhigh-rocm'",
-    "sys_platform == 'emscripten' and extra != 'extra-8-flowhigh-cpu' and extra != 'extra-8-flowhigh-cuda' and extra != 'extra-8-flowhigh-rocm'",
-    "sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-8-flowhigh-cpu' and extra != 'extra-8-flowhigh-cuda' and extra != 'extra-8-flowhigh-rocm'",
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/85/e4af82cc9202023862090bfca4ea827d533329e925c758f0cde964cb54b7/nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:210cf05005a447e29214e9ce50851e83fc5f4358df8b453155d5e1918094dcb4", size = 89568129, upload-time = "2025-06-05T20:02:41.973Z" },
-    { url = "https://files.pythonhosted.org/packages/64/eb/c2295044b8f3b3b08860e2f6a912b702fc92568a167259df5dddb78f325e/nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:096d4de6bda726415dfaf3198d4f5c522b8e70139c97feef5cd2ca6d4cd9cead", size = 44528905, upload-time = "2025-06-05T20:02:29.754Z" },
-    { url = "https://files.pythonhosted.org/packages/52/de/823919be3b9d0ccbf1f784035423c5f18f4267fb0123558d58b813c6ec86/nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-win_amd64.whl", hash = "sha256:72972ebdcf504d69462d3bcd67e7b81edd25d0fb85a2c46d3ea3517666636349", size = 76408187, upload-time = "2025-06-05T20:12:27.819Z" },
 ]
 
 [[package]]
