@@ -489,14 +489,12 @@ dependencies = [
 
 [package.optional-dependencies]
 cpu = [
-    { name = "bigvgan", marker = "extra == 'extra-8-flowhigh-cpu' or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm')" },
     { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-8-flowhigh-cpu') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm')" },
     { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-8-flowhigh-cpu') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm')" },
     { name = "torchaudio", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-8-flowhigh-cpu') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm')" },
     { name = "torchaudio", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-8-flowhigh-cpu') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm')" },
 ]
 cuda = [
-    { name = "bigvgan", marker = "(sys_platform != 'darwin' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm')" },
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
     { name = "torchaudio", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
 ]
@@ -504,7 +502,6 @@ gradio = [
     { name = "gradio" },
 ]
 rocm = [
-    { name = "bigvgan", marker = "(sys_platform == 'linux' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm')" },
     { name = "pytorch-triton-rocm", marker = "sys_platform == 'linux'" },
     { name = "torch", version = "2.11.0+rocm7.2", source = { registry = "https://download.pytorch.org/whl/rocm7.2" }, marker = "sys_platform == 'linux'" },
     { name = "torchaudio", version = "2.11.0+rocm7.2", source = { registry = "https://download.pytorch.org/whl/rocm7.2" }, marker = "sys_platform == 'linux'" },
@@ -523,9 +520,6 @@ dev = [
 requires-dist = [
     { name = "beartype", specifier = ">=0.22" },
     { name = "bigvgan", git = "https://github.com/perennialtech/BigVGAN" },
-    { name = "bigvgan", extras = ["cpu"], marker = "extra == 'cpu'", git = "https://github.com/perennialtech/BigVGAN" },
-    { name = "bigvgan", extras = ["cuda"], marker = "sys_platform != 'darwin' and extra == 'cuda'", git = "https://github.com/perennialtech/BigVGAN" },
-    { name = "bigvgan", extras = ["rocm"], marker = "sys_platform == 'linux' and extra == 'rocm'", git = "https://github.com/perennialtech/BigVGAN" },
     { name = "einops", specifier = ">=0.8" },
     { name = "gateloop-transformer", specifier = ">=0.2" },
     { name = "gradio", marker = "extra == 'gradio'", specifier = ">=6.19" },
