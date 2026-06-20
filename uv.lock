@@ -112,7 +112,7 @@ wheels = [
 [[package]]
 name = "bigvgan"
 version = "2.4.0"
-source = { git = "https://github.com/perennialtech/BigVGAN#f59915ee1889bf0de0ea01697a7b1263e85aef9d" }
+source = { git = "https://github.com/perennialtech/BigVGAN#2fe9282bdd5077bf0d768759bf011057792f7a63" }
 dependencies = [
     { name = "auraloss" },
     { name = "huggingface-hub" },
