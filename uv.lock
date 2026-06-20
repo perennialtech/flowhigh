@@ -495,7 +495,6 @@ cpu = [
     { name = "torchaudio", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-8-flowhigh-cpu') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm')" },
 ]
 cuda = [
-    { name = "nvidia-cuda-nvrtc-cu12" },
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
     { name = "torchaudio", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
 ]
@@ -527,7 +526,6 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.19" },
     { name = "librosa", specifier = ">=0.11" },
     { name = "numpy", specifier = ">=2.4" },
-    { name = "nvidia-cuda-nvrtc-cu12", marker = "extra == 'cuda'", specifier = ">=12.0" },
     { name = "pytorch-triton-rocm", marker = "sys_platform == 'linux' and extra == 'rocm'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "flowhigh", extra = "rocm" } },
     { name = "scipy", specifier = ">=1.17" },
     { name = "torch", marker = "sys_platform != 'darwin' and extra == 'cuda'", specifier = "==2.11", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "flowhigh", extra = "cuda" } },

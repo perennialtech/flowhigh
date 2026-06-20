@@ -26,7 +26,6 @@ cpu = [
 cuda = [
     "torch==2.11; sys_platform != 'darwin'",
     "torchaudio==2.11; sys_platform != 'darwin'",
-    "nvidia-cuda-nvrtc-cu12>=12.0", # for BigVGAN
 ]
 rocm = [
     "torch==2.11; sys_platform == 'linux'",
