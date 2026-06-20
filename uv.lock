@@ -112,7 +112,7 @@ wheels = [
 [[package]]
 name = "bigvgan"
 version = "2.4.0"
-source = { git = "https://github.com/perennialtech/BigVGAN#ab03856674f46a192893b7735284ae8d5d3aeebf" }
+source = { git = "https://github.com/perennialtech/BigVGAN#f59915ee1889bf0de0ea01697a7b1263e85aef9d" }
 dependencies = [
     { name = "auraloss" },
     { name = "huggingface-hub" },
@@ -495,6 +495,7 @@ cpu = [
     { name = "torchaudio", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-8-flowhigh-cpu') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-cuda') or (extra == 'extra-8-flowhigh-cpu' and extra == 'extra-8-flowhigh-rocm') or (extra == 'extra-8-flowhigh-cuda' and extra == 'extra-8-flowhigh-rocm')" },
 ]
 cuda = [
+    { name = "nvidia-cudnn-cu12" },
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
     { name = "torchaudio", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
 ]
@@ -526,6 +527,7 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.19" },
     { name = "librosa", specifier = ">=0.11" },
     { name = "numpy", specifier = ">=2.4" },
+    { name = "nvidia-cudnn-cu12", marker = "extra == 'cuda'", specifier = ">=9.19" },
     { name = "pytorch-triton-rocm", marker = "sys_platform == 'linux' and extra == 'rocm'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "flowhigh", extra = "rocm" } },
     { name = "scipy", specifier = ">=1.17" },
     { name = "torch", marker = "sys_platform != 'darwin' and extra == 'cuda'", specifier = "==2.11", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "flowhigh", extra = "cuda" } },

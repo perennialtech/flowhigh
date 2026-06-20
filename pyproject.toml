@@ -26,6 +26,7 @@ cpu = [
 cuda = [
     "torch==2.11; sys_platform != 'darwin'",
     "torchaudio==2.11; sys_platform != 'darwin'",
+    "nvidia-cudnn-cu12>=9.19",
 ]
 rocm = [
     "torch==2.11; sys_platform == 'linux'",
