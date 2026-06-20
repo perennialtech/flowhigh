@@ -34,7 +34,7 @@ rocm = [
     "pytorch-triton-rocm; sys_platform == 'linux'",
     "triton-rocm; sys_platform == 'linux'",
 ]
-gradio = [
+ui = [
     "gradio>=6.19",
 ]
 

@@ -499,14 +499,14 @@ cuda = [
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
     { name = "torchaudio", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
 ]
-gradio = [
-    { name = "gradio" },
-]
 rocm = [
     { name = "pytorch-triton-rocm", marker = "sys_platform == 'linux'" },
     { name = "torch", version = "2.11.0+rocm7.2", source = { registry = "https://download.pytorch.org/whl/rocm7.2" }, marker = "sys_platform == 'linux'" },
     { name = "torchaudio", version = "2.11.0+rocm7.2", source = { registry = "https://download.pytorch.org/whl/rocm7.2" }, marker = "sys_platform == 'linux'" },
     { name = "triton-rocm", marker = "sys_platform == 'linux'" },
+]
+ui = [
+    { name = "gradio" },
 ]
 
 [package.dev-dependencies]
@@ -523,7 +523,7 @@ requires-dist = [
     { name = "bigvgan", git = "https://github.com/perennialtech/BigVGAN" },
     { name = "einops", specifier = ">=0.8" },
     { name = "gateloop-transformer", specifier = ">=0.2" },
-    { name = "gradio", marker = "extra == 'gradio'", specifier = ">=6.19" },
+    { name = "gradio", marker = "extra == 'ui'", specifier = ">=6.19" },
     { name = "huggingface-hub", specifier = ">=1.19" },
     { name = "librosa", specifier = ">=0.11" },
     { name = "numpy", specifier = ">=2.4" },
@@ -542,7 +542,7 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.68" },
     { name = "triton-rocm", marker = "sys_platform == 'linux' and extra == 'rocm'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "flowhigh", extra = "rocm" } },
 ]
-provides-extras = ["cpu", "cuda", "rocm", "gradio"]
+provides-extras = ["cpu", "cuda", "rocm", "ui"]
 
 [package.metadata.requires-dev]
 dev = [
