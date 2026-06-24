@@ -83,7 +83,7 @@ pytorch-triton-rocm = [
 triton-rocm = [
     { index = "pytorch-rocm72", extra = "rocm", marker = "sys_platform == 'linux'" },
 ]
-bigvgan = { url = "https://github.com/perennialtech/BigVGAN/releases/download/v2026.6.22/bigvgan-2026.6.22-cp311-cp311-linux_x86_64.whl" }
+bigvgan = { url = "https://github.com/perennialtech/BigVGAN/releases/download/v2026.6.24/bigvgan-2026.6.24-cp311-cp311-linux_x86_64.whl" }
 
 [dependency-groups]
 dev = [
