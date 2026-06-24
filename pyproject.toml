@@ -20,19 +20,19 @@ dependencies = [
 
 [project.optional-dependencies]
 cpu = [
-    "torch==2.11",
-    "torchaudio==2.11",
+    "torch>=2.11",
+    "torchaudio>=2.11",
 ]
 cuda = [
-    "torch==2.11; sys_platform != 'darwin'",
-    "torchaudio==2.11; sys_platform != 'darwin'",
+    "torch>=2.11; sys_platform != 'darwin'",
+    "torchaudio>=2.11; sys_platform != 'darwin'",
     "nvidia-cudnn-cu13>=9.19",
 ]
 rocm = [
-    "torch==2.11; sys_platform == 'linux'",
-    "torchaudio==2.11; sys_platform == 'linux'",
-    "pytorch-triton-rocm; sys_platform == 'linux'",
-    "triton-rocm; sys_platform == 'linux'",
+    "torch>=2.11; sys_platform >= 'linux'",
+    "torchaudio>=2.11; sys_platform >= 'linux'",
+    "pytorch-triton-rocm; sys_platform >= 'linux'",
+    "triton-rocm; sys_platform >= 'linux'",
 ]
 ui = [
     "gradio>=6.19",
